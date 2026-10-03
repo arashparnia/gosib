@@ -1,0 +1,43 @@
+name: Swift package
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: swift-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Package on ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain
+        run: swift --version
+      - name: Tests
+        run: swift test
+      - name: Release build
+        run: swift build -c release
+      - name: iOS Simulator compile
+        run: >-
+          xcodebuild -scheme GosibApple
+          -destination 'generic/platform=iOS Simulator'
+          -derivedDataPath .build/ios-simulator
+          CODE_SIGNING_ALLOWED=NO IPHONEOS_DEPLOYMENT_TARGET=16.0
+          build -quiet
+      - name: Injected-link demo
+        run: swift run gosib-demo

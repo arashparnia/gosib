@@ -1,0 +1,39 @@
+name: Bug report
+description: Report a reproducible software or physical-link problem.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use synthetic or redacted data. Do not attach credentials, private keys, runtime databases or device identifiers. Report security vulnerabilities through the repository's Security tab instead.
+  - type: input
+    id: version
+    attributes:
+      label: Gosib version or commit
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment and topology
+      description: Device models, OS and Swift versions, enabled radios, foreground/background state, network conditions and number of hops. Say whether links are physical or injected.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Steps or a small synthetic example that another contributor can run.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and observed behavior
+      description: Distinguish local enqueue, relay storage, endpoint receipt and application result.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Redacted evidence and checks
+      description: Relevant errors, test output, timing method and attempted recovery. No personal information or secrets.

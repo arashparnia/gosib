@@ -1,0 +1,22 @@
+name: Feature proposal
+description: Propose a reusable capability or interoperability improvement.
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Concrete problem
+      description: Describe the application-independent capability and who needs it.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Explain which layer owns the change and its effect on wire compatibility, trust, persistence, resource limits and lifecycle.
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification and alternatives
+      description: What software or physical-device evidence would demonstrate the behavior? Which existing mechanism or alternatives have you considered?

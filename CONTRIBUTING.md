@@ -1,0 +1,53 @@
+# Contributing to Gosib
+
+Gosib is an experimental, application-independent nearby messaging framework. Contributions should make its behavior easier to verify and its limits easier to understand.
+
+## Develop locally
+
+Use Swift 5.9 or later on macOS 13 or later with Xcode installed. The first implementation uses Apple's CryptoKit, CoreBluetooth and Network frameworks, plus the system SQLite library. Android, Linux and browser implementations are future work.
+
+```sh
+swift test
+swift build -c release
+swift run gosib-demo
+```
+
+An optional independent crypto-vector check uses Node 22 or later and built-in modules only:
+
+```sh
+node scripts/check-interop-vector.cjs
+```
+
+This verifies the committed synthetic [wire fixture](Tests/GosibCoreTests/Fixtures/canonical-v1.json) with Node/OpenSSL. It is not an Android/browser adapter or a physical-radio test, and Node is not a dependency of the Swift package or its CI workflow.
+
+The demo uses synthetic data and injected links. It does not establish Bluetooth range, background receiving or physical mesh performance. See [qualification](docs/qualification.md).
+
+## Make a focused change
+
+Open an issue for a substantial wire-format, cryptography, routing or persistence change before building it. Explain the concrete behavior you want and how peers using an older version should behave. Small fixes can go directly to a pull request.
+
+Keep transport adapters independent of application models. Examples may illustrate a use case; core code must not assume restaurants, orders, chat rooms, purchases or a particular business authority.
+
+Preserve these boundaries:
+
+- Persist an immutable outgoing message before its first transmission.
+- A relay acknowledgment means durable next-hop storage only.
+- An endpoint receipt means authenticated, durable inbox bytes. The application separately decides whether those bytes authorize an action and whether that action succeeded.
+- Retries preserve message identity and content. Duplicate delivery must not create another inbox message.
+- Owned outbox, inbox and receipt records are independent of the bounded spool for relaying other devices' packets.
+- Missing paths and storage failures must remain observable. A timeout does not establish that the endpoint never received a message.
+- Discovery, proximity and a valid signing key do not establish application permission.
+
+Add tests for meaningful failure cases: duplicates, restarts, lost receipts, expiry, tampering, full spools, storage errors and alternate paths. A radio change also needs physical-device evidence; unit tests alone cannot qualify it.
+
+Update the relevant protocol or integration documentation when behavior changes. Mark proposals as proposals. Do not turn an aspiration into a measured performance claim.
+
+## Pull requests
+
+Describe the problem, resulting behavior, compatibility impact and checks performed. Include only synthetic or redacted evidence. Keep credentials, private keys, device identifiers, runtime databases, personal information and generated builds out of commits and issue attachments.
+
+For radio reports, include device models, OS versions, app lifecycle, enabled radios, router/network conditions and the exact topology. Report endpoint receipt latency separately from application processing or UI appearance.
+
+Contributions are accepted under the repository's [MIT license](LICENSE). Submit only code and assets you are entitled to contribute. Treat other contributors respectfully and explain disagreements with evidence.
+
+Security-sensitive findings belong in [private vulnerability reports](SECURITY.md), not public issues.
