@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-public enum GosibError: Error, Equatable, LocalizedError {
+public enum PechPechError: Error, Equatable, LocalizedError {
     case invalid(String), authenticationFailed, expired, identityConflict, messageConflict
     case spoolFull, storage(String), frameTooLarge(Int)
     public var errorDescription: String? {
@@ -41,7 +41,7 @@ public struct PublicIdentity: Codable, Equatable, Sendable, Identifiable {
         self.signingKey = signingKey; self.agreementKey = agreementKey; try validate()
     }
     public func validate() throws {
-        guard signingKey.count == 32, agreementKey.count == 32 else { throw GosibError.authenticationFailed }
+        guard signingKey.count == 32, agreementKey.count == 32 else { throw PechPechError.authenticationFailed }
         _ = try Curve25519.Signing.PublicKey(rawRepresentation: signingKey)
         _ = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: agreementKey)
     }
@@ -90,7 +90,7 @@ public struct Message: Codable, Equatable, Sendable, Identifiable {
         guard WireCoding.isAddress(senderID), WireCoding.isAddress(destinationID),
               !channel.isEmpty, channel.utf8.count <= 128,
               payload.count <= Self.maximumPayloadBytes, createdAt >= 0 else {
-            throw GosibError.invalid("Invalid message address, channel, time or payload size.")
+            throw PechPechError.invalid("Invalid message address, channel, time or payload size.")
         }
     }
     public var bodyHash: Data { get throws { WireCoding.hash(try WireCoding.encode(self)) } }
@@ -120,7 +120,7 @@ public enum EndpointEnvelope: Codable, Equatable, Sendable {
         case "message": self = .message(try c.decode(Message.self, forKey: .message))
         case "receipt": self = .receipt(try c.decode(DeliveryReceipt.self, forKey: .receipt))
         case "receiptStored": self = .receiptStored(messageID: try c.decode(UUID.self, forKey: .messageID), bodyHash: try c.decode(Data.self, forKey: .bodyHash))
-        default: throw GosibError.invalid("Unknown Gosib endpoint kind.")
+        default: throw PechPechError.invalid("Unknown PechPech endpoint kind.")
         }
     }
     public func encode(to encoder: Encoder) throws {
@@ -146,7 +146,7 @@ public struct PacketHeader: Codable, Equatable, Sendable {
     public let hopLimit: Int
     public init(packetID: UUID, destinationID: String, sender: PublicIdentity, ephemeralKey: Data,
                 priority: PacketPriority, expiresAt: Int64, hopLimit: Int = 8,
-                protocolName: String = "gosib", version: Int = 1) {
+                protocolName: String = "pechpech", version: Int = 2) {
         self.protocolName = protocolName; self.version = version; self.packetID = packetID
         self.destinationID = destinationID; self.sender = sender; self.ephemeralKey = ephemeralKey
         self.priority = priority; self.expiresAt = expiresAt; self.hopLimit = hopLimit
@@ -169,16 +169,16 @@ public struct RelayPacket: Codable, Equatable, Sendable, Identifiable {
     }
     public func validate(now: Int64 = WireCoding.now) throws {
         try header.sender.validate()
-        guard header.protocolName == "gosib", header.version == 1,
+        guard header.protocolName == "pechpech", header.version == 2,
               WireCoding.isAddress(destinationID), header.ephemeralKey.count == 32,
               (1...8).contains(header.hopLimit), (0...header.hopLimit).contains(hopsRemaining),
               encrypted.count >= 28, encrypted.count <= Self.maximumBytes else {
-            throw GosibError.invalid("Invalid Gosib relay metadata.")
+            throw PechPechError.invalid("Invalid PechPech relay metadata.")
         }
         // Subtraction is checked so hostile Int64 extremes cannot crash the decoder.
         let lifetime = expiresAt.subtractingReportingOverflow(now)
-        guard !lifetime.overflow, lifetime.partialValue > 0, lifetime.partialValue <= 600_000 else { throw GosibError.expired }
-        guard try WireCoding.encode(self).count <= Self.maximumBytes else { throw GosibError.frameTooLarge(try WireCoding.encode(self).count) }
+        guard !lifetime.overflow, lifetime.partialValue > 0, lifetime.partialValue <= 600_000 else { throw PechPechError.expired }
+        guard try WireCoding.encode(self).count <= Self.maximumBytes else { throw PechPechError.frameTooLarge(try WireCoding.encode(self).count) }
     }
     public func forwarded() -> RelayPacket? {
         guard hopsRemaining > 0 else { return nil }

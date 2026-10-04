@@ -1,6 +1,6 @@
 import Foundation
 import XCTest
-@testable import GosibCore
+@testable import PechPechCore
 
 final class FramingTests: XCTestCase {
     func testFragmentedConcatenatedFramesAtBoundarySizes() throws {

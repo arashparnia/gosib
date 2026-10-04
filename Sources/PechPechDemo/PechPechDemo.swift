@@ -1,10 +1,10 @@
 import Foundation
-import GosibCore
-import GosibApple
+import PechPechCore
+import PechPechApple
 
-@main struct GosibDemo {
+@main struct PechPechDemo {
     @MainActor static func main() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("gosib-example-\(UUID().uuidString)")
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("pechpech-example-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
         let sender = Identity(), relay = Identity(), receiver = Identity()
         let network = InMemoryNetwork()
@@ -47,13 +47,13 @@ import GosibApple
         let message = try a.enqueue(to: receiver.publicIdentity, channel: "example.notes", payload: Data("Station A is ready.".utf8))
         // Simulate duplication of the actual sent frame, while its next-hop
         // acknowledgment is still tracked by the sender's current attempt.
-        guard let originalFrame else { throw GosibError.invalid("No message frame was transmitted.") }
+        guard let originalFrame else { throw PechPechError.invalid("No message frame was transmitted.") }
         _ = senderLink.send(originalFrame, to: "relay", priority: PacketPriority.urgent.rawValue)
         for node in [a, r, b] { node.tick() }
         guard deliveries == 1, arrivals == 1, diagnostics.isEmpty,
               try senderStore.pending().isEmpty, try receiverStore.inbox().count == 1,
               try senderStore.receipt(messageID: message.id) != nil else {
-            throw GosibError.invalid("The in-memory delivery example did not complete.")
+            throw PechPechError.invalid("The in-memory delivery example did not complete.")
         }
         print("PASS: two-hop encrypted delivery, durable receipt, duplicate suppression; no radio or physical latency claim.")
     }

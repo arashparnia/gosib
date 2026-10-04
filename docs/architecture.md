@@ -1,13 +1,13 @@
 # Architecture
 
-Gosib extracts the general communication mechanism developed for GARVI into a separate open-source package. Its first release is a new, experimental protocol namespace. Existing GARVI builds and data remain unchanged, and their production wire protocol is not interchangeable with Gosib 0.1.
+PechPech (پچ‌پچ, whispering) extracts the general communication mechanism developed for GARVI into a separate open-source package. Release 0.2.0 uses an experimental version-2 protocol namespace. Existing GARVI builds and data remain unchanged, and their production wire protocol is not interchangeable with PechPech. The prior 0.1 SDK release also has incompatible APIs, wire identifiers and storage; see [migration](migration-0.2.md).
 
 ## Layers
 
 | Layer | Owns | Does not establish |
 | --- | --- | --- |
-| `GosibCore` | Identities, encrypted packets, immutable outgoing messages, durable inbox and receipts, bounded relay storage, routing and stream framing | Trust enrollment or business acceptance |
-| `GosibApple` | Foreground BLE and TCP/Bonjour links, discovery, fragmentation, per-link queues, disconnection events and an optional host-scoped Keychain identity helper | Application permissions or durable endpoint delivery |
+| `PechPechCore` | Identities, encrypted packets, immutable outgoing messages, durable inbox and receipts, bounded relay storage, routing and stream framing | Trust enrollment or business acceptance |
+| `PechPechApple` | Foreground BLE and TCP/Bonjour links, discovery, fragmentation, per-link queues, disconnection events and an optional host-scoped Keychain identity helper | Application permissions or durable endpoint delivery |
 | Host application | Secure key storage, trusted recipient selection, sender authorization, payload schema, UI, lifecycle and business transactions | A guarantee that radios or intermediate devices will remain available |
 
 `PacketLink` connects the routing core to a transport. Link-local peer identifiers are temporary transport handles, not endpoint identities. Signed identity exchange binds a handle to a cryptographic peer; applications still need an independent trust policy.
@@ -27,6 +27,8 @@ The receipt arrow resolves communication delivery. The separate application tran
 `MeshStore` keeps owned outgoing messages and received inbox bytes separate from the spool for other devices' encrypted packets. A full relay spool cannot evict an application's unresolved outgoing message or turn an endpoint receipt into a business result.
 
 The store enables and verifies SQLite WAL mode with `synchronous=FULL`; mutations use `BEGIN IMMEDIATE` transactions. `bindIdentity(_:)` pins one endpoint address to a database, including after restart. Reusing that store with another identity fails. Queueing records the exact message, recipient public identity and priority. Changing any of those for an existing outgoing ID fails.
+
+Current tables use the `pechpech_` namespace. The store rejects an existing file containing unrecognized user tables before enabling WAL or creating its tables. Use a dedicated SDK database file; do not point the new store at a prior-release or unrelated application database and expect automatic migration.
 
 The recipient records the inbox result and its outgoing endpoint receipt transactionally. Repeated messages with the same identity and contents recover the same result. A conflicting reuse of an identity is rejected. The sender persists a matching authenticated receipt before reporting durable endpoint delivery. Lost receipts can return through a different route; intermediate relay acknowledgments cannot substitute for them.
 
@@ -52,4 +54,4 @@ Foreground nearby operation is the initial scope. Locking a device, closing an a
 
 ## GARVI adoption roadmap
 
-Gosib starts with generic messages and durable-byte receipts. Migrating GARVI later requires an explicit application adapter, namespace/version negotiation, preserved command identity and stores, and tests proving its stricter kitchen acceptance boundaries. No existing GARVI installation is migrated by this repository.
+PechPech starts with generic messages and durable-byte receipts. Migrating GARVI later requires an explicit application adapter, namespace/version negotiation, preserved command identity and stores, and tests proving its stricter kitchen acceptance boundaries. No existing GARVI installation is migrated by this repository.

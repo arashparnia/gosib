@@ -1,6 +1,6 @@
 #if canImport(CoreBluetooth)
 import Foundation
-import GosibCore
+import PechPechCore
 @preconcurrency import CoreBluetooth
 
 /// Foreground multi-neighbor BLE transport. The caller owns authentication, retries,
@@ -14,8 +14,8 @@ public final class BLEPacketLink: NSObject, PacketLink {
     public var onDisconnected: ((String) -> Void)?
 
     // One discovery service across rooms. A name or this UUID never grants trust.
-    private static let serviceUUID = CBUUID(string: "C0675190-2099-471E-BAA6-DA93CD12451B")
-    private static let messageUUID = CBUUID(string: "C0675191-2099-471E-BAA6-DA93CD12451B")
+    private static let serviceUUID = CBUUID(string: "89B515C0-7D3F-4BD9-AC0B-6EC466823C62")
+    private static let messageUUID = CBUUID(string: "89B515C1-7D3F-4BD9-AC0B-6EC466823C62")
     private static let maximumPeers = 4
     private static let maximumQueuedMessages = 32
     private static let maximumQueuedBytes = 128 * 1024
@@ -176,7 +176,7 @@ public final class BLEPacketLink: NSObject, PacketLink {
 
     private func publishPeers() {
         let outgoing = clients.values.map { LinkPeer(id: "c:" + $0.peripheral.identifier.uuidString, name: $0.name) }
-        let incoming = subscribers.values.map { LinkPeer(id: "p:" + $0.central.identifier.uuidString, name: "Nearby Gosib") }
+        let incoming = subscribers.values.map { LinkPeer(id: "p:" + $0.central.identifier.uuidString, name: "Nearby PechPech") }
         onPeers?((outgoing + incoming).sorted { $0.id < $1.id })
     }
 
@@ -197,7 +197,7 @@ public final class BLEPacketLink: NSObject, PacketLink {
 
         if !manager.isScanning {
             manager.scanForPeripherals(withServices: [Self.serviceUUID], options: nil)
-            onState?("BLE discovering Gosib peers; up to \(Self.maximumPeers) nearby peers")
+            onState?("BLE discovering PechPech peers; up to \(Self.maximumPeers) nearby peers")
         }
     }
 
@@ -287,7 +287,7 @@ public final class BLEPacketLink: NSObject, PacketLink {
         if managerState == .unknown, !reportedStartupWait,
            let began = startupWaitBegan, now.timeIntervalSince(began) >= 10 {
             reportedStartupWait = true
-            onState?("BLE still waiting for Bluetooth authorization or system initialization. Keep Gosib foreground; if no prompt appears, check its Bluetooth permission in system privacy settings and confirm Bluetooth is on.")
+            onState?("BLE still waiting for Bluetooth authorization or system initialization. Keep PechPech foreground; if no prompt appears, check its Bluetooth permission in system privacy settings and confirm Bluetooth is on.")
         }
         ensureScanning()
         ensureAdvertising()
@@ -401,11 +401,11 @@ extension BLEPacketLink: @preconcurrency CBCentralManagerDelegate {
         guard central === centralManager, running else { return }
 
         let name = advertisementData[CBAdvertisementDataLocalNameKey] as? String
-            ?? peripheral.name ?? "Nearby Gosib"
+            ?? peripheral.name ?? "Nearby PechPech"
         guard name != serviceName else { return }
         // One duplex BLE connection per pair; the lower advertised identity initiates.
         // A discovery name selects topology only. Authenticated protocol messages establish identities; discovery names are untrusted.
-        if name.hasPrefix("GSP-"), name.count >= 16, String(serviceName.prefix(name.count)) >= name { return }
+        if name.hasPrefix("PP-"), name.count >= 16, String(serviceName.prefix(name.count)) >= name { return }
         if let link = clients[peripheral.identifier] {
             link.lastSeen = Date()
             if link.name != name { link.name = name; publishPeers() }
@@ -457,7 +457,7 @@ extension BLEPacketLink: @preconcurrency CBPeripheralDelegate {
     public func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         guard running, let link = clients[peripheral.identifier], !link.closing else { return }
         guard error == nil, let service = peripheral.services?.first(where: { $0.uuid == Self.serviceUUID }) else {
-            failClient(link, reason: "Gosib service discovery failed")
+            failClient(link, reason: "PechPech service discovery failed")
             return
         }
         peripheral.discoverCharacteristics([Self.messageUUID], for: service)
@@ -469,7 +469,7 @@ extension BLEPacketLink: @preconcurrency CBPeripheralDelegate {
         guard error == nil,
               let characteristic = service.characteristics?.first(where: { $0.uuid == Self.messageUUID }),
               characteristic.properties.contains(.write), characteristic.properties.contains(.notify) else {
-            failClient(link, reason: "Gosib message characteristic unavailable")
+            failClient(link, reason: "PechPech message characteristic unavailable")
             return
         }
         link.characteristic = characteristic
@@ -525,7 +525,7 @@ extension BLEPacketLink: @preconcurrency CBPeripheralDelegate {
     public func peripheral(_ peripheral: CBPeripheral, didModifyServices invalidatedServices: [CBService]) {
         guard running, invalidatedServices.contains(where: { $0.uuid == Self.serviceUUID }),
               let link = clients[peripheral.identifier] else { return }
-        failClient(link, reason: "Gosib service changed; reconnecting")
+        failClient(link, reason: "PechPech service changed; reconnecting")
     }
 }
 
@@ -562,7 +562,7 @@ extension BLEPacketLink: @preconcurrency CBPeripheralManagerDelegate {
         if let error {
             onState?("BLE advertising failed: \(error.localizedDescription); retrying")
         } else {
-            onState?("BLE scanning and advertising nearby Gosib; no router required")
+            onState?("BLE scanning and advertising nearby PechPech; no router required")
         }
     }
 

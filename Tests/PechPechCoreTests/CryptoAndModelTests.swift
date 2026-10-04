@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 import XCTest
-@testable import GosibCore
+@testable import PechPechCore
 
 final class CryptoAndModelTests: XCTestCase {
     private let now: Int64 = 1_700_000_000_000
@@ -20,6 +20,16 @@ final class CryptoAndModelTests: XCTestCase {
         for (key, value) in changes { header[key] = value }
         object["header"] = header
         return try WireCoding.decode(RelayPacket.self, from: JSONSerialization.data(withJSONObject: object))
+    }
+    private func withProtocol<T: Codable, C: Codable>(_ signed: T, claimsType: C.Type,
+                                                     protocolName: String, signer: Identity) throws -> T {
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: WireCoding.encode(signed)) as? [String: Any])
+        var claimsObject = try XCTUnwrap(object["claims"] as? [String: Any])
+        claimsObject["protocolName"] = protocolName
+        let claims = try WireCoding.decode(claimsType, from: JSONSerialization.data(withJSONObject: claimsObject))
+        object["claims"] = claimsObject
+        object["signature"] = try signer.sign(WireCoding.encode(claims)).base64EncodedString()
+        return try WireCoding.decode(T.self, from: JSONSerialization.data(withJSONObject: object))
     }
 
     func testEndpointRoundTripAndFreshRandomness() throws {
@@ -45,7 +55,7 @@ final class CryptoAndModelTests: XCTestCase {
             ["expiresAt": now + 59_000], ["priority": PacketPriority.receipt.rawValue],
             ["hopLimit": 7], ["sender": strangerObject],
             ["ephemeralKey": stranger.publicIdentity.agreementKey.base64EncodedString()],
-            ["destinationID": stranger.publicIdentity.id], ["version": 2], ["protocolName": "garvi"]
+            ["destinationID": stranger.publicIdentity.id], ["version": 1], ["protocolName": "foreign"]
         ]
         for changes in mutations {
             let changed = try edit(packet, header: changes)
@@ -71,6 +81,51 @@ final class CryptoAndModelTests: XCTestCase {
         XCTAssertThrowsError(try packet.validate(now: now))
         packet.hopsRemaining = -1
         XCTAssertThrowsError(try packet.validate(now: now))
+    }
+
+    func testPreviousWireVersionAndForeignNamespaceCannotOpenOrEnterRelaySpool() throws {
+        let sender = try identity(1), receiver = try identity(3), relay = try identity(5)
+        let packet = try EndpointCrypto.seal(.message(message(sender, receiver)), from: sender, to: receiver.publicIdentity, now: now)
+        XCTAssertEqual(packet.header.protocolName, "pechpech")
+        XCTAssertEqual(packet.header.version, 2)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("pechpech-version-test-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try MeshStore(url: directory.appendingPathComponent("mesh.sqlite"))
+        try store.bindIdentity(relay.publicIdentity)
+        let incompatibleHeaders: [[String: Any]] = [
+            ["version": 1], ["protocolName": "foreign", "version": 1],
+            ["protocolName": "foreign", "version": 2]
+        ]
+        for changes in incompatibleHeaders {
+            let incompatible = try edit(packet, header: changes)
+            XCTAssertThrowsError(try incompatible.validate(now: now))
+            XCTAssertThrowsError(try EndpointCrypto.open(incompatible, for: receiver, now: now))
+            XCTAssertThrowsError(try store.enqueueRelay(incompatible, now: now))
+        }
+        XCTAssertTrue(try store.relayPackets(now: now).isEmpty)
+        XCTAssertTrue(try store.enqueueRelay(packet, now: now))
+    }
+
+    func testValidlySignedPreviousAndForeignControlNamespacesAreRejected() throws {
+        let sender = try identity(1), receiver = try identity(3), challenge = UUID()
+        let hello = try SignedHello(identity: sender, challenge: challenge)
+        XCTAssertEqual(hello.claims.protocolName, "pechpech-link-2")
+        XCTAssertNoThrow(try hello.validate())
+        let packet = try EndpointCrypto.seal(.message(message(sender, receiver)), from: sender, to: receiver.publicIdentity, now: now)
+        let ack = try SignedRelayAck(identity: sender, packet: packet, echo: challenge)
+        XCTAssertEqual(ack.claims.protocolName, "pechpech-relay-ack-2")
+        XCTAssertNoThrow(try ack.validate(sender: sender.publicIdentity, challenge: challenge))
+        let publicKey = try Curve25519.Signing.PublicKey(rawRepresentation: sender.publicIdentity.signingKey)
+        for protocolName in ["pechpech-link-1", "foreign-link-1"] {
+            let incompatible = try withProtocol(hello, claimsType: HelloClaims.self, protocolName: protocolName, signer: sender)
+            XCTAssertTrue(publicKey.isValidSignature(incompatible.signature, for: try WireCoding.encode(incompatible.claims)))
+            XCTAssertThrowsError(try incompatible.validate())
+        }
+        for protocolName in ["pechpech-relay-ack-1", "foreign-relay-ack-1"] {
+            let incompatible = try withProtocol(ack, claimsType: RelayAckClaims.self, protocolName: protocolName, signer: sender)
+            XCTAssertTrue(publicKey.isValidSignature(incompatible.signature, for: try WireCoding.encode(incompatible.claims)))
+            XCTAssertThrowsError(try incompatible.validate(sender: sender.publicIdentity, challenge: challenge))
+        }
     }
 
     func testHostileTimestampExtremesAndLifetimesNeverOverflow() throws {
@@ -116,7 +171,7 @@ final class CryptoAndModelTests: XCTestCase {
     }
 
     func testCanonicalInteropVector() throws {
-        let vectorURL = try XCTUnwrap(Bundle.module.url(forResource: "canonical-v1", withExtension: "json", subdirectory: "Fixtures"))
+        let vectorURL = try XCTUnwrap(Bundle.module.url(forResource: "canonical-v2", withExtension: "json", subdirectory: "Fixtures"))
         let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: vectorURL)) as? [String: String])
         let sender = try identity(1), receiver = try identity(3)
         let message = try self.message(sender, receiver)
@@ -125,6 +180,8 @@ final class CryptoAndModelTests: XCTestCase {
         XCTAssertEqual(String(decoding: try WireCoding.encode(message), as: UTF8.self), fixture["messageJSON"])
         XCTAssertEqual(try message.bodyHash.base64EncodedString(), fixture["messageHashBase64"])
         let packet = try WireCoding.decode(RelayPacket.self, from: Data(try XCTUnwrap(fixture["packetJSON"]).utf8))
+        XCTAssertEqual(packet.header.protocolName, "pechpech")
+        XCTAssertEqual(packet.header.version, 2)
         XCTAssertEqual(String(decoding: try WireCoding.encode(packet.header), as: UTF8.self), fixture["headerJSON"])
         XCTAssertEqual(try EndpointCrypto.open(packet, for: receiver, now: now).envelope, .message(message))
         let signatureInput = Data(try XCTUnwrap(fixture["signatureInputUTF8"]).utf8)
@@ -139,5 +196,6 @@ final class CryptoAndModelTests: XCTestCase {
                                                sharedInfo: try WireCoding.encode(packet.header), outputByteCount: 32)
         XCTAssertEqual(key.withUnsafeBytes { Data($0).base64EncodedString() }, fixture["derivedKeyBase64"])
         XCTAssertEqual(EndpointCrypto.keyDerivationDomain, fixture["keyDerivationDomain"])
+        XCTAssertEqual(EndpointCrypto.keyDerivationDomain, "PECHPECH-2-X25519-HKDF-SHA256-AES256GCM-Ed25519")
     }
 }

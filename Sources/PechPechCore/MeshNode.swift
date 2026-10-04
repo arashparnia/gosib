@@ -79,13 +79,13 @@ public enum NodeEvent: Equatable, Sendable {
     @discardableResult public func enqueue(to recipient: PublicIdentity, channel: String, payload: Data,
                                           id: UUID = UUID(), priority: PacketPriority = .urgent,
                                           startSending: Bool = true) throws -> Message {
-        guard recipient.id != identity.publicIdentity.id else { throw GosibError.invalid("Use local storage for self-addressed messages.") }
+        guard recipient.id != identity.publicIdentity.id else { throw PechPechError.invalid("Use local storage for self-addressed messages.") }
         let message = try Message(id: id, senderID: identity.publicIdentity.id, destinationID: recipient.id,
                                   channel: channel, payload: payload)
         // Qualify the actual wrapped packet size before committing an unusable outbox entry.
         let packet = try EndpointCrypto.seal(.message(message), from: identity, to: recipient, priority: priority)
         guard try WireCoding.encode(MeshFrame.packet(packet)).count <= RelayPacket.maximumBytes else {
-            throw GosibError.frameTooLarge(try WireCoding.encode(MeshFrame.packet(packet)).count)
+            throw PechPechError.frameTooLarge(try WireCoding.encode(MeshFrame.packet(packet)).count)
         }
         try store.queue(message, recipient: recipient, priority: priority)
         if running && startSending { active.insert(message.id); origins[message.id] = packet; flush() }
@@ -140,16 +140,16 @@ public enum NodeEvent: Equatable, Sendable {
             if case .hello(let hello) = frame {
                 try hello.validate()
                 if peers[slot] == nil { peers[slot] = Peer() }
-                guard let peer = peers[slot], hello.claims.identity.id != identity.publicIdentity.id else { throw GosibError.identityConflict }
-                if let old = peer.remoteIdentity, old != hello.claims.identity { throw GosibError.identityConflict }
+                guard let peer = peers[slot], hello.claims.identity.id != identity.publicIdentity.id else { throw PechPechError.identityConflict }
+                if let old = peer.remoteIdentity, old != hello.claims.identity { throw PechPechError.identityConflict }
                 // Identity stays bound to a link until disconnect; fresh local challenge
                 // echo proves possession instead of trusting a replayed advertisement.
                 peer.remoteIdentity = hello.claims.identity
-                if let old = peer.remoteChallenge, old != hello.claims.challenge { throw GosibError.authenticationFailed }
+                if let old = peer.remoteChallenge, old != hello.claims.challenge { throw PechPechError.authenticationFailed }
                 peer.remoteChallenge = hello.claims.challenge
                 if hello.claims.echo == peer.challenge {
                     guard connectedIdentities.contains(hello.claims.identity) || connectedIdentities.count < 4 else {
-                        throw GosibError.invalid("The four-neighbor limit is reached.")
+                        throw PechPechError.invalid("The four-neighbor limit is reached.")
                     }
                     let wasReady = peer.ready; peer.ready = true
                     links[slot.link].confirmPeer(slot.id)
@@ -159,12 +159,12 @@ public enum NodeEvent: Equatable, Sendable {
                 if peer.ready { flush() }
                 return
             }
-            guard let peer = peers[slot], peer.ready, let neighbor = peer.remoteIdentity else { throw GosibError.authenticationFailed }
+            guard let peer = peers[slot], peer.ready, let neighbor = peer.remoteIdentity else { throw PechPechError.authenticationFailed }
             switch frame {
             case .hello: break
             case .stored(let ack):
                 try ack.validate(sender: neighbor, challenge: peer.challenge)
-                guard peer.sent[ack.claims.packetID] == ack.claims.packetHash else { throw GosibError.authenticationFailed }
+                guard peer.sent[ack.claims.packetID] == ack.claims.packetHash else { throw PechPechError.authenticationFailed }
                 // Only opaque relay copies are removed. Original outbox and return
                 // records can be retired only by their authenticated endpoint receipt.
                 try store.removeRelay(ack.claims.packetID)
@@ -184,7 +184,7 @@ public enum NodeEvent: Equatable, Sendable {
                 }
                 flush()
             }
-        } catch GosibError.spoolFull { onEvent?(.relayBackpressure) }
+        } catch PechPechError.spoolFull { onEvent?(.relayBackpressure) }
         catch { report(error) }
     }
 
@@ -194,7 +194,7 @@ public enum NodeEvent: Equatable, Sendable {
         case .message(let message):
             try message.validate()
             guard message.senderID == opened.sender.id, message.destinationID == identity.publicIdentity.id,
-                  authorize(message, opened.sender) else { throw GosibError.authenticationFailed }
+                  authorize(message, opened.sender) else { throw PechPechError.authenticationFailed }
             let previous = try store.received(messageID: message.id)
             _ = try store.accept(message, sender: opened.sender) { receipt in
                 try EndpointCrypto.seal(.receipt(receipt), from: identity, to: opened.sender,
@@ -275,7 +275,7 @@ public enum NodeEvent: Equatable, Sendable {
     @discardableResult private func send(_ frame: MeshFrame, to slot: Slot, priority: PacketPriority) -> Bool {
         do {
             let bytes = try WireCoding.encode(frame)
-            guard bytes.count <= RelayPacket.maximumBytes else { throw GosibError.frameTooLarge(bytes.count) }
+            guard bytes.count <= RelayPacket.maximumBytes else { throw PechPechError.frameTooLarge(bytes.count) }
             return links[slot.link].send(bytes, to: slot.id, priority: priority.rawValue)
         } catch { report(error); return false }
     }

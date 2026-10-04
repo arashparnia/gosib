@@ -1,6 +1,6 @@
 #if canImport(Network)
 import Foundation
-import GosibCore
+import PechPechCore
 import Network
 
 /// TCP transports opaque, application-authenticated envelopes. `includePeerToPeer`
@@ -14,7 +14,7 @@ public final class TCPPacketLink: PacketLink {
     public var onDisconnected: ((String) -> Void)?
 
     private let includePeerToPeer: Bool
-    private let serviceType = "_gosib._tcp"
+    private let serviceType = "_pechpech._tcp"
     private let maximumFrameSize = 16_384
     private let maximumQueuedBytes = 262_144
     private var localServiceName = ""
@@ -141,7 +141,7 @@ public final class TCPPacketLink: PacketLink {
                     guard let self, self.listener === newListener else { return }
                     switch state {
                     case .ready:
-                        self.onState?("Gosib TCP relay listening; \(self.modeDescription).")
+                        self.onState?("PechPech TCP relay listening; \(self.modeDescription).")
                     case .failed(let error):
                         self.onState?("TCP listener failed: \(error.localizedDescription)")
                     case .waiting(let error):
@@ -177,7 +177,7 @@ public final class TCPPacketLink: PacketLink {
                 guard let self, self.browser === newBrowser else { return }
                 switch state {
                 case .ready:
-                    self.onState?("Looking for nearby Gosib apps; \(self.modeDescription).")
+                    self.onState?("Looking for nearby PechPech apps; \(self.modeDescription).")
                 case .waiting(let error):
                     self.onState?("Discovery waiting: \(error.localizedDescription)")
                 case .failed(let error):

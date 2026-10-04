@@ -1,7 +1,7 @@
 import Foundation
 import SQLite3
 import XCTest
-@testable import GosibCore
+@testable import PechPechCore
 
 final class StoreTests: XCTestCase {
     private var directories: [URL] = []
@@ -10,7 +10,7 @@ final class StoreTests: XCTestCase {
         super.tearDown()
     }
     private func url() -> URL {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("gosib-test-\(UUID())")
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("pechpech-test-\(UUID())")
         directories.append(directory)
         return directory.appendingPathComponent("mesh.sqlite")
     }
@@ -30,9 +30,9 @@ final class StoreTests: XCTestCase {
     }
     private func execute(_ sql: String, at url: URL) throws {
         var db: OpaquePointer?
-        guard sqlite3_open(url.path, &db) == SQLITE_OK, let db else { throw GosibError.storage("Cannot open synthetic fixture.") }
+        guard sqlite3_open(url.path, &db) == SQLITE_OK, let db else { throw PechPechError.storage("Cannot open synthetic fixture.") }
         defer { sqlite3_close(db) }
-        guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else { throw GosibError.storage("Cannot apply synthetic failure trigger.") }
+        guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else { throw PechPechError.storage("Cannot apply synthetic failure trigger.") }
     }
     private func packet(_ sender: Identity, _ receiver: Identity, id: UUID = UUID(), priority: PacketPriority = .normal,
                         now: Int64, lifetime: Int64 = 600_000, encryptedBytes: Int = 28) -> RelayPacket {
@@ -61,6 +61,31 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(try reopened.pending().first?.message, original)
     }
 
+    func testForeignSchemaIsRejectedWithoutChangingExistingRowsOrCreatingTables() throws {
+        let path = url()
+        try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try execute("CREATE TABLE foreign_outbox(id TEXT PRIMARY KEY,payload TEXT NOT NULL); INSERT INTO foreign_outbox(id,payload) VALUES('sentinel','preserve this original row');", at: path)
+        XCTAssertThrowsError(try MeshStore(url: path))
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(path.path, &db), SQLITE_OK)
+        defer { sqlite3_close(db) }
+        func textRows(_ sql: String) throws -> [String] {
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
+                throw PechPechError.storage("Cannot inspect synthetic foreign database")
+            }
+            defer { sqlite3_finalize(statement) }
+            var rows: [String] = []
+            while sqlite3_step(statement) == SQLITE_ROW {
+                if let text = sqlite3_column_text(statement, 0) { rows.append(String(cString: text)) }
+            }
+            return rows
+        }
+        XCTAssertEqual(try textRows("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name;"), ["foreign_outbox"])
+        XCTAssertEqual(try textRows("SELECT payload FROM foreign_outbox WHERE id='sentinel';"), ["preserve this original row"])
+        XCTAssertEqual(try textRows("PRAGMA journal_mode;"), ["delete"], "Reject a foreign store before changing its journaling mode")
+    }
+
     func testUnboundStoreAndWrongDestinationCannotRecordOwnedData() throws {
         let sender = Identity(), receiver = Identity(), stranger = Identity()
         let unbound = try MeshStore(url: url()), original = try message(sender, receiver)
@@ -68,7 +93,7 @@ final class StoreTests: XCTestCase {
         XCTAssertThrowsError(try accept(original, from: sender, at: receiver, store: unbound))
         let bound = try store(receiver)
         XCTAssertThrowsError(try accept(message(sender, stranger), from: sender, at: stranger, store: bound))
-        XCTAssertThrowsError(try bound.accept(original, sender: stranger.publicIdentity) { _ in throw GosibError.invalid("Must not reach sealing hook") })
+        XCTAssertThrowsError(try bound.accept(original, sender: stranger.publicIdentity) { _ in throw PechPechError.invalid("Must not reach sealing hook") })
         XCTAssertTrue(try bound.inbox().isEmpty)
         XCTAssertTrue(try bound.outgoingReceipts().isEmpty)
     }
@@ -100,10 +125,10 @@ final class StoreTests: XCTestCase {
     func testReceiptCreationOrStorageFailureRollsBackInboxAndReturn() throws {
         let sender = Identity(), receiver = Identity(), path = url(), original = try message(sender, receiver)
         let inbox = try store(receiver, at: path)
-        XCTAssertThrowsError(try inbox.accept(original, sender: sender.publicIdentity) { _ in throw GosibError.invalid("Synthetic seal failure") })
+        XCTAssertThrowsError(try inbox.accept(original, sender: sender.publicIdentity) { _ in throw PechPechError.invalid("Synthetic seal failure") })
         XCTAssertTrue(try inbox.inbox().isEmpty)
         XCTAssertTrue(try inbox.outgoingReceipts().isEmpty)
-        try execute("CREATE TRIGGER fail_returns BEFORE INSERT ON gosib_returns BEGIN SELECT RAISE(ABORT,'synthetic storage failure'); END;", at: path)
+        try execute("CREATE TRIGGER fail_returns BEFORE INSERT ON pechpech_returns BEGIN SELECT RAISE(ABORT,'synthetic storage failure'); END;", at: path)
         XCTAssertThrowsError(try accept(original, from: sender, at: receiver, store: inbox))
         XCTAssertTrue(try inbox.inbox().isEmpty)
         XCTAssertTrue(try inbox.outgoingReceipts().isEmpty)
@@ -149,13 +174,13 @@ final class StoreTests: XCTestCase {
         let outbox = try store(sender, at: outboxURL), inbox = try store(receiver, at: inboxURL)
         try outbox.queue(original, recipient: receiver.publicIdentity)
         let receipt = try accept(original, from: sender, at: receiver, store: inbox)
-        try execute("CREATE TRIGGER fail_receipt BEFORE UPDATE OF receipt ON gosib_outbox BEGIN SELECT RAISE(ABORT,'synthetic'); END;", at: outboxURL)
+        try execute("CREATE TRIGGER fail_receipt BEFORE UPDATE OF receipt ON pechpech_outbox BEGIN SELECT RAISE(ABORT,'synthetic'); END;", at: outboxURL)
         XCTAssertThrowsError(try outbox.saveReceipt(receipt, authenticatedReceiver: receiver.publicIdentity))
         XCTAssertEqual(try outbox.pending().count, 1)
         XCTAssertNil(try outbox.receipt(messageID: original.id))
         try execute("DROP TRIGGER fail_receipt;", at: outboxURL)
         try outbox.saveReceipt(receipt, authenticatedReceiver: receiver.publicIdentity)
-        try execute("CREATE TRIGGER fail_retirement BEFORE DELETE ON gosib_returns BEGIN SELECT RAISE(ABORT,'synthetic'); END;", at: inboxURL)
+        try execute("CREATE TRIGGER fail_retirement BEFORE DELETE ON pechpech_returns BEGIN SELECT RAISE(ABORT,'synthetic'); END;", at: inboxURL)
         XCTAssertThrowsError(try inbox.retireReturn(messageID: original.id, bodyHash: receipt.bodyHash, senderID: sender.publicIdentity.id))
         XCTAssertEqual(try inbox.outgoingReceipts().count, 1)
         XCTAssertEqual(try inbox.inbox().count, 1)
@@ -209,7 +234,7 @@ final class StoreTests: XCTestCase {
         XCTAssertLessThanOrEqual(try original.reduce(0) { $0 + (try WireCoding.encode($1).count) }, MeshStore.maximumRelayBytes)
         XCTAssertThrowsError(try relay.enqueueRelay(packet(Identity(), receiver, priority: .bulk, now: now), now: now))
         XCTAssertEqual(try relay.relayPackets(now: now), original)
-        try execute("CREATE TRIGGER fail_relay_insert BEFORE INSERT ON gosib_relays BEGIN SELECT RAISE(ABORT,'synthetic'); END;", at: path)
+        try execute("CREATE TRIGGER fail_relay_insert BEFORE INSERT ON pechpech_relays BEGIN SELECT RAISE(ABORT,'synthetic'); END;", at: path)
         let urgent = packet(Identity(), receiver, priority: .receipt, now: now)
         XCTAssertThrowsError(try relay.enqueueRelay(urgent, now: now))
         XCTAssertEqual(try relay.relayPackets(now: now), original)

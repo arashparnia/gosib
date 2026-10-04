@@ -1,6 +1,6 @@
 import Foundation
 import XCTest
-@testable import GosibApple
+@testable import PechPechApple
 
 final class TCPFramingTests: XCTestCase {
     func testBigEndianLengthAndPayloadBoundaries() throws {
@@ -26,8 +26,8 @@ final class TCPFramingTests: XCTestCase {
     func testDiscoveryNamesAreBoundedDeterministicAndDoNotCollapseCommonPrefixes() {
         let first = DiscoveryName.make(from: "my-app-instance-alpha")
         let second = DiscoveryName.make(from: "my-app-instance-beta")
-        XCTAssertEqual(first.utf8.count, 24)
-        XCTAssertTrue(first.hasPrefix("GSP-"))
+        XCTAssertEqual(first.utf8.count, 23)
+        XCTAssertTrue(first.hasPrefix("PP-"))
         XCTAssertEqual(DiscoveryName.make(from: "my-app-instance-alpha"), first)
         XCTAssertNotEqual(first, second)
     }

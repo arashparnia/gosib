@@ -18,7 +18,7 @@ enum BLEFragment {
         let offset = UInt16(message.offset)
         let id = message.id
         var result = Data([
-            0x47, 0x50, 0x01, 0x00,
+            0x50, 0x50, 0x02, 0x00,
             UInt8((id >> 24) & 0xff), UInt8((id >> 16) & 0xff),
             UInt8((id >> 8) & 0xff), UInt8(id & 0xff),
             UInt8((total >> 8) & 0xff), UInt8(total & 0xff),
@@ -76,7 +76,7 @@ struct BLEReassembler {
     mutating func append(_ value: Data) throws -> Data? {
         guard value.count >= BLEFragment.headerBytes else { throw Failure.malformed }
         let header = Array(value.prefix(BLEFragment.headerBytes))
-        guard header[0] == 0x47, header[1] == 0x50, header[2] == 1, header[3] == 0 else {
+        guard header[0] == 0x50, header[1] == 0x50, header[2] == 2, header[3] == 0 else {
             throw Failure.malformed
         }
         let id = UInt32(header[4]) << 24 | UInt32(header[5]) << 16

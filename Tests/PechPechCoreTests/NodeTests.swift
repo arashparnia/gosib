@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 import SQLite3
 import XCTest
-@testable import GosibCore
+@testable import PechPechCore
 
 @MainActor private final class MemoryLink: PacketLink {
     var onState: ((String) -> Void)?
@@ -46,7 +46,7 @@ final class NodeTests: XCTestCase {
     private var directories: [URL] = []
     override func tearDown() { directories.forEach { try? FileManager.default.removeItem(at: $0) }; super.tearDown() }
     private func url() -> URL {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("gosib-node-test-\(UUID())")
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("pechpech-node-test-\(UUID())")
         directories.append(folder); return folder.appendingPathComponent("node.sqlite")
     }
     @MainActor private func node(_ identity: Identity, _ link: MemoryLink, path: URL? = nil,
@@ -212,7 +212,7 @@ final class NodeTests: XCTestCase {
         var db: OpaquePointer?
         XCTAssertEqual(sqlite3_open(path.path, &db), SQLITE_OK)
         defer { sqlite3_close(db) }
-        XCTAssertEqual(sqlite3_exec(db, "CREATE TRIGGER fail_queue BEFORE INSERT ON gosib_outbox BEGIN SELECT RAISE(ABORT,'synthetic'); END;", nil, nil, nil), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(db, "CREATE TRIGGER fail_queue BEFORE INSERT ON pechpech_outbox BEGIN SELECT RAISE(ABORT,'synthetic'); END;", nil, nil, nil), SQLITE_OK)
         let before = la.packetCount
         XCTAssertThrowsError(try sender.enqueue(to: b.publicIdentity, channel: "test", payload: Data([5])))
         XCTAssertEqual(la.packetCount, before)

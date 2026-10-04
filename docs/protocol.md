@@ -1,6 +1,8 @@
-# Gosib wire protocol
+# PechPech wire protocol
 
-This document describes the initial Gosib 0.1 package's version-1 wire format. The package version and wire version are separate. This is an experimental application protocol over BLE or TCP, not Bluetooth SIG Mesh or GARVI's deployed application protocol.
+This document describes PechPech 0.2.0's version-2 wire format. PechPech (پچ‌پچ) means whispering. The package version and wire version are separate. This is an experimental application protocol over BLE or TCP, not Bluetooth SIG Mesh or GARVI's deployed application protocol.
+
+The 0.2 release changes modules, discovery, cryptographic domains and storage namespaces. It does not interoperate with the prior 0.1 release. See [compatibility and migration](migration-0.2.md) before upgrading an existing host.
 
 The 0.x API may evolve. A wire-breaking change requires an explicit version/domain change, revised interoperability vectors and documented old-peer behavior. Peers reject unsupported protocol/version and unknown envelope/frame kinds rather than guessing their meaning.
 
@@ -14,7 +16,7 @@ The host securely persists its private keys and pins the intended recipient iden
 
 `WireCoding` emits UTF-8 JSON with lexicographically sorted object keys and unescaped forward slashes. Binary `Data` fields use standard base64. UUIDs use uppercase canonical hyphenated strings. Time values are integer Unix milliseconds. Strings use standard JSON escaping without Unicode normalization. The protocol models contain no floating-point values.
 
-Other implementations must reproduce these bytes when computing a message hash or authenticated header. The signature covers the exact encoded envelope bytes carried inside the ciphertext. [The canonical interoperability fixture](../Tests/GosibCoreTests/Fixtures/canonical-v1.json) includes synthetic addresses, message/header encodings, a message hash, signature input/result and an encrypted packet. Its repeated-byte private keys are test material, never operational identities. The initial release includes a Swift reference implementation; Android and other language implementations remain future work.
+Other implementations must reproduce these bytes when computing a message hash or authenticated header. The signature covers the exact encoded envelope bytes carried inside the ciphertext. [The canonical interoperability fixture](../Tests/PechPechCoreTests/Fixtures/canonical-v2.json) includes synthetic addresses, message/header encodings, a message hash, signature input/result and an encrypted packet. Its repeated-byte private keys are test material, never operational identities. The release includes a Swift reference implementation; Android and other language implementations remain future work.
 
 An optional independently implemented Node/OpenSSL [vector checker](../scripts/check-interop-vector.cjs) verifies the fixture's exact encodings, identities, signatures, key agreement, derivation and authenticated decryption. It uses Node 22+ built-in modules with no provider credentials or external dependencies:
 
@@ -38,13 +40,13 @@ Passing a static vector is a useful interoperability check, not proof of a compl
 
 ## Endpoint encryption
 
-`PacketHeader` contains `protocolName="gosib"`, `version=1`, `packetID`, `destinationID`, `sender`, `ephemeralKey`, `priority`, `expiresAt` and `hopLimit`.
+`PacketHeader` contains `protocolName="pechpech"`, `version=2`, `packetID`, `destinationID`, `sender`, `ephemeralKey`, `priority`, `expiresAt` and `hopLimit`.
 
 For each newly sealed endpoint envelope:
 
 1. Generate a fresh ephemeral X25519 agreement key and encode the header.
 2. Agree that ephemeral key with the intended recipient's persistent X25519 public key.
-3. Derive a 32-byte key with HKDF-SHA256. Salt is UTF-8 `GOSIB-1-X25519-HKDF-SHA256-AES256GCM-Ed25519`; shared information is the encoded header.
+3. Derive a 32-byte key with HKDF-SHA256. Salt is UTF-8 `PECHPECH-2-X25519-HKDF-SHA256-AES256GCM-Ed25519`; shared information is the encoded header.
 4. Encode the endpoint envelope. Ed25519 signs `headerBytes || envelopeBytes`.
 5. Encode `{payload: base64(envelopeBytes), signature: base64(signature)}` and encrypt it using AES-256-GCM with the header bytes as associated data and a fresh random nonce.
 6. Carry `nonce || ciphertext || tag` in the relay packet's `encrypted` field.
@@ -82,9 +84,9 @@ The mutable remaining-hop count bounds honest forwarding. A hostile relay can re
 
 The packet bytes delivered by a `PacketLink` encode a `MeshFrame`, not a bare relay packet. Its explicit `kind` is `hello` (field `hello`), `packet` (field `packet`) or `stored` (field `ack`). The complete encoded frame must also fit 16,384 bytes.
 
-`SignedHello` carries `claims` and `signature`. Claims contain `protocolName="gosib-link-1"`, the public `identity`, a random link-local `challenge`, and optional `echo`. The signature is Ed25519 over canonical claims. Each side echoes the other's challenge in its signed hello; a node marks the neighbor ready only after verifying a response to its fresh local challenge. The identity and remote challenge stay bound to that link handle until disconnection. A replayed advertisement or self-signature alone does not complete this handshake.
+`SignedHello` carries `claims` and `signature`. Claims contain `protocolName="pechpech-link-2"`, the public `identity`, a random link-local `challenge`, and optional `echo`. The signature is Ed25519 over canonical claims. Each side echoes the other's challenge in its signed hello; a node marks the neighbor ready only after verifying a response to its fresh local challenge. The identity and remote challenge stay bound to that link handle until disconnection. A replayed advertisement or self-signature alone does not complete this handshake.
 
-`SignedRelayAck` likewise carries signed claims: `protocolName="gosib-relay-ack-1"`, `senderID`, `packetID`, `packetHash` and `echo`. The packet hash is SHA-256 of `canonicalHeaderBytes || encryptedBytes`, excluding mutable remaining hops. The echo binds the acknowledgment to the current neighbor challenge. The node also checks that it actually sent that immutable packet to the authenticated neighbor before removing an opaque relay copy.
+`SignedRelayAck` likewise carries signed claims: `protocolName="pechpech-relay-ack-2"`, `senderID`, `packetID`, `packetHash` and `echo`. The packet hash is SHA-256 of `canonicalHeaderBytes || encryptedBytes`, excluding mutable remaining hops. The echo binds the acknowledgment to the current neighbor challenge. The node also checks that it actually sent that immutable packet to the authenticated neighbor before removing an opaque relay copy.
 
 A `stored` acknowledgment follows durable relay admission or endpoint persistence. It retires only a relay copy. It cannot erase an owned outbox message or recipient return record, and it cannot resolve endpoint delivery. The independent encrypted endpoint receipt does that.
 
@@ -98,22 +100,22 @@ The intended recipient authorizes and stores message bytes before creating an en
 
 The sender validates the authenticated recipient identity, original message and body hash, then durably saves the receipt. Only this boundary can resolve framework delivery. An authenticated `receiptStored` from the original sender retires the recipient's active return packet; durable inbox and result records remain available for replay recovery.
 
-Owned outbox/inbox records are retained independently of relay expiry and capacity. Successfully delivered outgoing messages leave the pending query, but their immutable snapshots and receipts remain. There is no automatic deduplication-history compaction in 0.1. When an outgoing receipt packet expires, retrying the original immutable message can regenerate it from the durable inbox result.
+Owned outbox/inbox records are retained independently of relay expiry and capacity. Successfully delivered outgoing messages leave the pending query, but their immutable snapshots and receipts remain. There is no automatic deduplication-history compaction in 0.2. When an outgoing receipt packet expires, retrying the original immutable message can regenerate it from the durable inbox result.
 
 Link queue admission, completed BLE/TCP writes and next-hop storage acknowledgments are earlier boundaries. None proves durable endpoint storage. A lost receipt leaves delivery uncertain; a timeout cannot prove the recipient never received it. Receipts may return through a different relay chain.
 
-Business execution belongs to the application. Applications need their own idempotent command/result protocol and durable transaction for any side effect. Gosib does not implement leader election, automatic authority replacement, order grants or replicated business-state merging.
+Business execution belongs to the application. Applications need their own idempotent command/result protocol and durable transaction for any side effect. PechPech does not implement leader election, automatic authority replacement, order grants or replicated business-state merging.
 
 ## Native framing
 
-TCP/Bonjour advertises `_gosib._tcp`. Each nonempty frame has a four-byte unsigned big-endian length followed by 1–16,384 bytes. The framing layer provides message boundaries only; endpoint encryption provides payload confidentiality and authentication.
+TCP/Bonjour advertises `_pechpech._tcp`. Each nonempty frame has a four-byte unsigned big-endian length followed by 1–16,384 bytes. The framing layer provides message boundaries only; endpoint encryption provides payload confidentiality and authentication.
 
-BLE uses service UUID `C0675190-2099-471E-BAA6-DA93CD12451B` and message characteristic UUID `C0675191-2099-471E-BAA6-DA93CD12451B`. Its 12-byte fragment header is:
+BLE uses service UUID `89B515C0-7D3F-4BD9-AC0B-6EC466823C62` and message characteristic UUID `89B515C1-7D3F-4BD9-AC0B-6EC466823C62`. Its 12-byte fragment header is:
 
 | Bytes | Field |
 | --- | --- |
-| 0–1 | Magic `0x47 0x50` (`GP`) |
-| 2 | Version `1` |
+| 0–1 | Magic `0x50 0x50` (`PP`) |
+| 2 | Version `2` |
 | 3 | Reserved `0` |
 | 4–7 | Nonzero unsigned 32-bit message ID, big-endian |
 | 8–9 | Unsigned 16-bit total message bytes, big-endian |
@@ -122,7 +124,7 @@ BLE uses service UUID `C0675190-2099-471E-BAA6-DA93CD12451B` and message charact
 
 Per-neighbor reassembly checks message ID, total length and contiguous offsets. A new zero-offset fragment replaces an abandoned partial stream. Packet/message identity and durable receipts recover any lost prior message. BLE transmission finishes an already-started stream before selecting a higher-priority message.
 
-Discovery names are truncated hashes used for topology selection, not authenticated identities. Gosib's service, framing magic and key-derivation domain are distinct from deployed GARVI peers; connecting the protocols requires a reviewed adapter rather than renaming a service.
+Discovery names use `PP-` followed by the first ten bytes of SHA-256 of the node name rendered as twenty hexadecimal characters. They select topology rather than authenticate identities. PechPech's service, framing magic and key-derivation domain are distinct from the prior 0.1 release and deployed GARVI peers; connecting the protocols requires a reviewed adapter rather than renaming a service.
 
 ## Threat model and non-guarantees
 

@@ -7,7 +7,7 @@ public struct HelloClaims: Codable, Equatable, Sendable {
     public let challenge: UUID
     public let echo: UUID?
     public init(identity: PublicIdentity, challenge: UUID, echo: UUID? = nil) {
-        protocolName = "gosib-link-1"; self.identity = identity; self.challenge = challenge; self.echo = echo
+        protocolName = "pechpech-link-2"; self.identity = identity; self.challenge = challenge; self.echo = echo
     }
 }
 
@@ -20,9 +20,9 @@ public struct SignedHello: Codable, Equatable, Sendable {
     }
     public func validate() throws {
         try claims.identity.validate()
-        guard claims.protocolName == "gosib-link-1", signature.count == 64,
+        guard claims.protocolName == "pechpech-link-2", signature.count == 64,
               try Curve25519.Signing.PublicKey(rawRepresentation: claims.identity.signingKey)
-                .isValidSignature(signature, for: WireCoding.encode(claims)) else { throw GosibError.authenticationFailed }
+                .isValidSignature(signature, for: WireCoding.encode(claims)) else { throw PechPechError.authenticationFailed }
     }
 }
 
@@ -33,7 +33,7 @@ public struct RelayAckClaims: Codable, Equatable, Sendable {
     public let packetHash: Data
     public let echo: UUID
     public init(senderID: String, packetID: UUID, packetHash: Data, echo: UUID) {
-        protocolName = "gosib-relay-ack-1"; self.senderID = senderID; self.packetID = packetID
+        protocolName = "pechpech-relay-ack-2"; self.senderID = senderID; self.packetID = packetID
         self.packetHash = packetHash; self.echo = echo
     }
 }
@@ -52,10 +52,10 @@ public struct SignedRelayAck: Codable, Equatable, Sendable {
     }
     public func validate(sender: PublicIdentity, challenge: UUID) throws {
         try sender.validate()
-        guard claims.protocolName == "gosib-relay-ack-1", claims.senderID == sender.id,
+        guard claims.protocolName == "pechpech-relay-ack-2", claims.senderID == sender.id,
               claims.echo == challenge, claims.packetHash.count == 32, signature.count == 64,
               try Curve25519.Signing.PublicKey(rawRepresentation: sender.signingKey)
-                .isValidSignature(signature, for: WireCoding.encode(claims)) else { throw GosibError.authenticationFailed }
+                .isValidSignature(signature, for: WireCoding.encode(claims)) else { throw PechPechError.authenticationFailed }
     }
 }
 
@@ -68,7 +68,7 @@ public enum MeshFrame: Codable, Equatable, Sendable {
         case "hello": self = .hello(try c.decode(SignedHello.self, forKey: .hello))
         case "packet": self = .packet(try c.decode(RelayPacket.self, forKey: .packet))
         case "stored": self = .stored(try c.decode(SignedRelayAck.self, forKey: .ack))
-        default: throw GosibError.invalid("Unknown Gosib link frame.")
+        default: throw PechPechError.invalid("Unknown PechPech link frame.")
         }
     }
     public func encode(to encoder: Encoder) throws {

@@ -11,7 +11,7 @@ public struct LengthFramer: Sendable {
     public init() {}
 
     public static func frame(_ data: Data) throws -> Data {
-        guard data.count <= maximumPayloadBytes else { throw GosibError.frameTooLarge(data.count) }
+        guard data.count <= maximumPayloadBytes else { throw PechPechError.frameTooLarge(data.count) }
         let length = UInt32(data.count)
         return Data([
             UInt8((length >> 24) & 0xff), UInt8((length >> 16) & 0xff),
@@ -31,7 +31,7 @@ public struct LengthFramer: Sendable {
                     guard prefix.count == 4 else { break }
                     let length = prefix.reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
                     guard length <= UInt32(Self.maximumPayloadBytes) else {
-                        throw GosibError.frameTooLarge(Int(length))
+                        throw PechPechError.frameTooLarge(Int(length))
                     }
                     prefix.removeAll(keepingCapacity: true)
                     expectedLength = Int(length)

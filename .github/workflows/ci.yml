@@ -1,4 +1,4 @@
-name: Swift package
+name: PechPech package
 
 on:
   push:
@@ -34,10 +34,10 @@ jobs:
         run: swift build -c release
       - name: iOS Simulator compile
         run: >-
-          xcodebuild -scheme GosibApple
+          xcodebuild -scheme PechPechApple
           -destination 'generic/platform=iOS Simulator'
           -derivedDataPath .build/ios-simulator
           CODE_SIGNING_ALLOWED=NO IPHONEOS_DEPLOYMENT_TARGET=16.0
           build -quiet
       - name: Injected-link demo
-        run: swift run gosib-demo
+        run: swift run pechpech-demo

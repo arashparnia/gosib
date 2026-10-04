@@ -1,12 +1,16 @@
-# Integrating Gosib
+# Integrating PechPech
 
-The first package supports native iOS 16+ and macOS 13+ applications using Swift 5.9+. It has no external package dependencies. Add `GosibCore` for protocol and storage, and `GosibApple` for the native BLE/TCP adapters. The root [README](../README.md) and `gosib-demo` provide a runnable core example.
+The first package supports native iOS 16+ and macOS 13+ applications using Swift 5.9+. It has no external package dependencies. Add `PechPechCore` for protocol and storage, and `PechPechApple` for the native BLE/TCP adapters. The root [README](../README.md) and `pechpech-demo` provide a runnable core example.
+
+These instructions target PechPech 0.2.0 and wire version 2. The prior 0.1 release is incompatible. Choose a dedicated current-release database or complete a reviewed migration using [the upgrade guide](migration-0.2.md); preserve unresolved records and private identities.
 
 ## Trust and application behavior
 
 Persist a stable `Identity` in the platform's secure storage. Pin the intended `PublicIdentity` using an application-owned enrollment procedure. Require an explicit sender authorization policy when creating the node. A permissive demo policy is appropriate only for synthetic test data, never a production default.
 
-Native hosts can use `KeychainIdentityStore.loadOrCreate(service:account:)` from `GosibApple`. Choose a unique, stable service in your own bundle namespace and keep the account stable; its default is `"endpoint"`. The helper uses Apple's [data-protection Keychain](https://developer.apple.com/documentation/security/ksecusedataprotectionkeychain), disables synchronization and stores keys with [AfterFirstUnlockThisDeviceOnly](https://developer.apple.com/documentation/security/ksecattraccessibleafterfirstunlockthisdeviceonly) accessibility. Keys become available after the first unlock following restart and do not migrate to a different device through backup restoration.
+Native hosts can use `KeychainIdentityStore.loadOrCreate(service:account:)` from `PechPechApple`. Choose a unique, stable service in your own bundle namespace and keep the account stable; its default is `"endpoint"`. The helper uses Apple's [data-protection Keychain](https://developer.apple.com/documentation/security/ksecusedataprotectionkeychain), disables synchronization and stores keys with [AfterFirstUnlockThisDeviceOnly](https://developer.apple.com/documentation/security/ksecattraccessibleafterfirstunlockthisdeviceonly) accessibility. Keys become available after the first unlock following restart and do not migrate to a different device through backup restoration.
+
+The helper's local private-record encoding remains version 1, independently of wire version 2. A wire upgrade is not permission to replace a stored identity or change the host's Keychain service/account silently.
 
 Existing invalid or inaccessible records are errors, not overwritten identities. A concurrent creation reads back the winning saved identity. The helper has no plaintext or legacy-Keychain fallback and chooses no team or access group for you. A signed host needs a valid Keychain context; an unsigned SwiftPM CLI may fail with `errSecMissingEntitlement`. Resolve access or restore the original trusted identity instead of creating a replacement to hide an error. Key rotation and migration remain explicit application work.
 
@@ -14,8 +18,8 @@ For example, after the host restores `identity`, chooses `databaseURL` and obtai
 
 ```swift
 import Foundation
-import GosibCore
-import GosibApple
+import PechPechCore
+import PechPechApple
 
 let node = try MeshNode(
     identity: identity,
@@ -65,11 +69,11 @@ Add human-readable purpose strings and the declared service to the host app's `I
 <string>Find nearby devices and exchange messages on the local network.</string>
 <key>NSBonjourServices</key>
 <array>
-    <string>_gosib._tcp</string>
+    <string>_pechpech._tcp</string>
 </array>
 ```
 
-Use purpose text that accurately describes your product. Bluetooth and local-network permission prompts are controlled by the OS; Gosib cannot bypass them. Handle denied access and a later Settings change. Apple's [local-network privacy guidance](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy) explains these keys and the permission lifecycle.
+Use purpose text that accurately describes your product. Bluetooth and local-network permission prompts are controlled by the OS; PechPech cannot bypass them. Handle denied access and a later Settings change. Apple's [local-network privacy guidance](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy) explains these keys and the permission lifecycle.
 
 For a sandboxed native Mac host using TCP, enable both outgoing client and incoming server network access. The adapter listens and connects. See Apple's [server entitlement documentation](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.network.server). Configure appropriate Bluetooth access for the host's sandbox and distribution configuration.
 

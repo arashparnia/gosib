@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-// Node 22+ / OpenSSL cross-check of the published Gosib v1 fixture.
+// Node 22+ / OpenSSL cross-check of the independently generated PechPech v2 fixture.
 // Every private input is an openly specified, repeated-byte SYNTHETIC TEST seed.
 // Never use these identities or the fixed nonce in an application. No credentials,
 // environment variables, runtime stores or external packages are read by this check.
@@ -11,11 +11,11 @@ const crypto = require('node:crypto');
 const assert = require('node:assert/strict');
 
 assert.ok(Number(process.versions.node.split('.')[0]) >= 22, 'Node 22 or later is required.');
-const fixturePath = path.join(__dirname, '..', 'Tests', 'GosibCoreTests', 'Fixtures', 'canonical-v1.json');
+const fixturePath = path.join(__dirname, '..', 'Tests', 'PechPechCoreTests', 'Fixtures', 'canonical-v2.json');
 const fixture = JSON.parse(fs.readFileSync(fixturePath, 'utf8'));
 assert.equal(fixture.syntheticInputs,
   'sender Ed25519 seed=01 repeated 32; sender X25519=02 repeated 32; receiver Ed25519=03 repeated 32; receiver X25519=04 repeated 32; ephemeral X25519=07 repeated 32; AES-GCM nonce=09 repeated 12');
-assert.equal(fixture.keyDerivationDomain, 'GOSIB-1-X25519-HKDF-SHA256-AES256GCM-Ed25519');
+assert.equal(fixture.keyDerivationDomain, 'PECHPECH-2-X25519-HKDF-SHA256-AES256GCM-Ed25519');
 
 function syntheticPrivateKey(kind, byte) {
   const prefix = kind === 'Ed25519' ? '302e020100300506032b657004220420' : '302e020100300506032b656e04220420';
@@ -64,7 +64,7 @@ const message = {
   payload: Buffer.from('hello / café\n', 'utf8').toString('base64'), createdAt: 1700000000000
 };
 const expectedHeader = {
-  protocolName: 'gosib', version: 1, packetID: '10213243-5465-7687-98A9-BACBDCEDFE0F',
+  protocolName: 'pechpech', version: 2, packetID: '10213243-5465-7687-98A9-BACBDCEDFE0F',
   destinationID: fixture.receiverAddress, sender: senderIdentity,
   ephemeralKey: rawPublicKey(ephemeral).toString('base64'), priority: 2,
   expiresAt: 1700000060000, hopLimit: 8
@@ -102,4 +102,4 @@ assert.equal(signed.signature, fixture.signatureBase64);
 assert.ok(crypto.verify(null, Buffer.concat([aad, envelope]), signingPublic, Buffer.from(signed.signature, 'base64')));
 assert.equal(crypto.createHash('sha256').update(Buffer.from(fixture.messageJSON, 'utf8')).digest('base64'), fixture.messageHashBase64);
 
-console.log('PASS: Gosib v1 synthetic vector: exact canonical bytes, public identities/address hashes, Ed25519 signatures, bidirectional X25519 agreement, HKDF-SHA256 and authenticated AES-256-GCM decryption verified with Node/OpenSSL. No radio or platform implementation claim.');
+console.log('PASS: PechPech v2 synthetic vector: exact canonical bytes, public identities/address hashes, Ed25519 signatures, bidirectional X25519 agreement, HKDF-SHA256 and authenticated AES-256-GCM decryption verified with Node/OpenSSL. No radio or platform implementation claim.');

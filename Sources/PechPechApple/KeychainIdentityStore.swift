@@ -1,6 +1,6 @@
 #if canImport(Security) && canImport(CryptoKit)
 import Foundation
-import GosibCore
+import PechPechCore
 import Security
 
 /// Host-scoped identity persistence in Apple's data-protection Keychain.

@@ -1,10 +1,10 @@
 #if canImport(Security) && canImport(CryptoKit)
 import CryptoKit
 import Foundation
-import GosibCore
+import PechPechCore
 import Security
 import XCTest
-@testable import GosibApple
+@testable import PechPechApple
 
 /// Pure codec/argument tests: no actual host Keychain data is read or created.
 final class KeychainIdentityStoreTests: XCTestCase {
@@ -45,7 +45,7 @@ final class KeychainIdentityStoreTests: XCTestCase {
                 XCTAssertEqual($0 as? KeychainIdentityStore.Failure, .invalidNamespace)
             }
         }
-        XCTAssertTrue(KeychainIdentityStore.validNamespace("com.example.myapp.gosib.identity"))
+        XCTAssertTrue(KeychainIdentityStore.validNamespace("com.example.myapp.pechpech.identity"))
         XCTAssertTrue(KeychainIdentityStore.validNamespace("endpoint"))
         XCTAssertThrowsError(try KeychainIdentityStore.loadOrCreate(service: "com.example.synthetic", account: "")) {
             XCTAssertEqual($0 as? KeychainIdentityStore.Failure, .invalidNamespace)

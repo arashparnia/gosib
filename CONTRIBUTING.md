@@ -1,6 +1,6 @@
-# Contributing to Gosib
+# Contributing to PechPech
 
-Gosib is an experimental, application-independent nearby messaging framework. Contributions should make its behavior easier to verify and its limits easier to understand.
+PechPech is an experimental, application-independent nearby messaging framework. Contributions should make its behavior easier to verify and its limits easier to understand.
 
 ## Develop locally
 
@@ -9,7 +9,7 @@ Use Swift 5.9 or later on macOS 13 or later with Xcode installed. The first impl
 ```sh
 swift test
 swift build -c release
-swift run gosib-demo
+swift run pechpech-demo
 ```
 
 An optional independent crypto-vector check uses Node 22 or later and built-in modules only:
@@ -18,13 +18,15 @@ An optional independent crypto-vector check uses Node 22 or later and built-in m
 node scripts/check-interop-vector.cjs
 ```
 
-This verifies the committed synthetic [wire fixture](Tests/GosibCoreTests/Fixtures/canonical-v1.json) with Node/OpenSSL. It is not an Android/browser adapter or a physical-radio test, and Node is not a dependency of the Swift package or its CI workflow.
+This verifies the committed synthetic [wire fixture](Tests/PechPechCoreTests/Fixtures/canonical-v2.json) with Node/OpenSSL. It is not an Android/browser adapter or a physical-radio test, and Node is not a dependency of the Swift package or its CI workflow.
 
 The demo uses synthetic data and injected links. It does not establish Bluetooth range, background receiving or physical mesh performance. See [qualification](docs/qualification.md).
 
 ## Make a focused change
 
 Open an issue for a substantial wire-format, cryptography, routing or persistence change before building it. Explain the concrete behavior you want and how peers using an older version should behave. Small fixes can go directly to a pull request.
+
+The current experimental release is 0.2.0 with wire version 2. It breaks compatibility with 0.1. Read [the migration guide](docs/migration-0.2.md) before adapting an existing host, database or interoperability implementation.
 
 Keep transport adapters independent of application models. Examples may illustrate a use case; core code must not assume restaurants, orders, chat rooms, purchases or a particular business authority.
 

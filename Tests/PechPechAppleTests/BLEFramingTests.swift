@@ -1,7 +1,7 @@
 
 import Foundation
 import XCTest
-@testable import GosibApple
+@testable import PechPechApple
 
 /// Exercises codecs without instantiating any radio manager.
 final class BLEFramingTests: XCTestCase {
@@ -120,6 +120,9 @@ final class BLEFramingTests: XCTestCase {
         try check(BLEFragment.encode(BLEOutboundMessage(id: 1, data: Data([1]), priority: 2), maximumValueBytes: 12) == nil, "A header-only negotiated value was accepted.")
         try rejects(Data()); try rejects(Data(repeating: 0, count: 12))
         let frame = BLEFragment.encode(BLEOutboundMessage(id: 1, data: Data(repeating: 1, count: 20), priority: 2), maximumValueBytes: 20)!.data
+        try check(Data(frame.prefix(4)) == Data([0x50, 0x50, 0x02, 0x00]), "The current BLE namespace/version header is incorrect.")
+        var previousVersion = frame; previousVersion[2] = 1; try rejects(previousVersion)
+        var foreignNamespace = frame; foreignNamespace[0] = 0x46; foreignNamespace[1] = 0x52; try rejects(foreignNamespace)
         for field in 0...3 { var invalid = frame; invalid[field] ^= 0xff; try rejects(invalid) }
         var zeroID = frame; for field in 4...7 { zeroID[field] = 0 }; try rejects(zeroID)
         var tooLarge = frame; tooLarge[8] = 0x40; tooLarge[9] = 1; try rejects(tooLarge)
@@ -127,7 +130,7 @@ final class BLEFramingTests: XCTestCase {
         var expired = BLEReassembler(); _ = try expired.append(frame)
         try check(expired.discardIfInactive(before: .greatestFiniteMagnitude), "An inactive partial stream was retained.")
 
-        print("PASS: Gosib BLE framing: 60 boundary round trips, sliced Data, idle/FIFO priority, five in-flight first-fragment cases, started-stream protection, priority at message boundaries, unchanged backpressure frames, independent neighbor buffers and malformed/size/sequence bounds.")
+        print("PASS: PechPech BLE framing: 60 boundary round trips, sliced Data, idle/FIFO priority, five in-flight first-fragment cases, started-stream protection, priority at message boundaries, unchanged backpressure frames, independent neighbor buffers and malformed/size/sequence bounds.")
         print("No Bluetooth managers or physical radios were exercised.")
     }
 }

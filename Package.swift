@@ -2,19 +2,19 @@
 import PackageDescription
 
 let package = Package(
-    name: "Gosib",
+    name: "PechPech",
     platforms: [.iOS(.v16), .macOS(.v13)],
     products: [
-        .library(name: "GosibCore", targets: ["GosibCore"]),
-        .library(name: "GosibApple", targets: ["GosibApple"]),
-        .executable(name: "gosib-demo", targets: ["GosibDemo"])
+        .library(name: "PechPechCore", targets: ["PechPechCore"]),
+        .library(name: "PechPechApple", targets: ["PechPechApple"]),
+        .executable(name: "pechpech-demo", targets: ["PechPechDemo"])
     ],
     targets: [
-        .target(name: "GosibCore", linkerSettings: [.linkedLibrary("sqlite3")]),
-        .target(name: "GosibApple", dependencies: ["GosibCore"]),
-        .executableTarget(name: "GosibDemo", dependencies: ["GosibCore", "GosibApple"]),
-        .testTarget(name: "GosibCoreTests", dependencies: ["GosibCore"], resources: [.copy("Fixtures")]),
-        .testTarget(name: "GosibAppleTests", dependencies: ["GosibApple", "GosibCore"])
+        .target(name: "PechPechCore", linkerSettings: [.linkedLibrary("sqlite3")]),
+        .target(name: "PechPechApple", dependencies: ["PechPechCore"]),
+        .executableTarget(name: "PechPechDemo", dependencies: ["PechPechCore", "PechPechApple"]),
+        .testTarget(name: "PechPechCoreTests", dependencies: ["PechPechCore"], resources: [.copy("Fixtures")]),
+        .testTarget(name: "PechPechAppleTests", dependencies: ["PechPechApple", "PechPechCore"])
     ],
     swiftLanguageVersions: [.v5]
 )
