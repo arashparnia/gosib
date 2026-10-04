@@ -1,8 +1,10 @@
 # PechPech wire protocol
 
-This document describes PechPech 0.2.0's version-2 wire format. PechPech (پچ‌پچ) means whispering. The package version and wire version are separate. This is an experimental application protocol over BLE or TCP, not Bluetooth SIG Mesh or GARVI's deployed application protocol.
+This document describes the generic `MeshNode` version-2 wire format, introduced in PechPech 0.2 and retained in 0.3. PechPech (پچ‌پچ) means whispering. The package version and wire version are separate. This is an experimental application protocol over BLE or TCP, not Bluetooth SIG Mesh or a host's existing business protocol.
 
 The 0.2 release changes modules, discovery, cryptographic domains and storage namespaces. It does not interoperate with the prior 0.1 release. See [compatibility and migration](migration-0.2.md) before upgrading an existing host.
+
+PechPech 0.3 also provides [opaque host profiles](opaque-profiles.md) with separate challenge/acknowledgment domains. Those profiles reuse native framing while retaining host-owned endpoint bytes and storage. Their packets and receipts are not the generic envelopes specified here.
 
 The 0.x API may evolve. A wire-breaking change requires an explicit version/domain change, revised interoperability vectors and documented old-peer behavior. Peers reject unsupported protocol/version and unknown envelope/frame kinds rather than guessing their meaning.
 
@@ -100,7 +102,7 @@ The intended recipient authorizes and stores message bytes before creating an en
 
 The sender validates the authenticated recipient identity, original message and body hash, then durably saves the receipt. Only this boundary can resolve framework delivery. An authenticated `receiptStored` from the original sender retires the recipient's active return packet; durable inbox and result records remain available for replay recovery.
 
-Owned outbox/inbox records are retained independently of relay expiry and capacity. Successfully delivered outgoing messages leave the pending query, but their immutable snapshots and receipts remain. There is no automatic deduplication-history compaction in 0.2. When an outgoing receipt packet expires, retrying the original immutable message can regenerate it from the durable inbox result.
+Owned outbox/inbox records are retained independently of relay expiry and capacity. Successfully delivered outgoing messages leave the pending query, but their immutable snapshots and receipts remain. There is no automatic deduplication-history compaction in the current generic store. When an outgoing receipt packet expires, retrying the original immutable message can regenerate it from the durable inbox result.
 
 Link queue admission, completed BLE/TCP writes and next-hop storage acknowledgments are earlier boundaries. None proves durable endpoint storage. A lost receipt leaves delivery uncertain; a timeout cannot prove the recipient never received it. Receipts may return through a different relay chain.
 

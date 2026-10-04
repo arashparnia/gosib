@@ -8,13 +8,13 @@ PechPech is an open-source Swift SDK for encrypted, offline, store-and-forward m
 
 Developed from GARVI's restaurant communication work, PechPech separates the reusable mechanism from restaurant orders, menus, accounts, and screens. You can build your own payloads and application rules on top of it.
 
-**Status: experimental 0.2.0.** Native iPhone, iPad, and Mac hosts are supported at the source level. Physical radio deployment, latency, and background operation remain unqualified. A usable radio path and OS permissions are required. Android and browser implementations are future work.
+**Status: experimental 0.3.0.** Native iPhone, iPad, and Mac hosts are supported at the source level. Physical radio deployment, latency, and background operation remain unqualified. A usable radio path and OS permissions are required. Android and browser implementations are future work.
 
 ## What is included
 
 | Component | Provides |
 | --- | --- |
-| `PechPechCore` | Endpoint identities, authenticated encryption, immutable durable outbox, deduplicated inbox, endpoint receipts, and relay scheduling |
+| `PechPechCore` | Endpoint identities, authenticated encryption, immutable durable outbox, deduplicated inbox, endpoint receipts, relay scheduling, and routing for host-managed encrypted profiles |
 | `PechPechApple` | Concurrent BLE scanning/advertising, multiple neighbors, TCP/Bonjour links, bounded transport queues, and host-scoped Keychain identity storage |
 | `pechpech-demo` | A runnable two-hop example using injected links and temporary databases; no radios or credentials |
 
@@ -35,14 +35,14 @@ swift run pechpech-demo
 
 The demo creates sender → relay → receiver, saves a message before transmission, verifies its durable endpoint receipt, and replays it without creating a duplicate inbox entry. This exercises the real core protocol and persistence through a deterministic adapter; it does not measure physical Bluetooth performance.
 
-With Node 22+, `node scripts/check-interop-vector.cjs` independently verifies the published synthetic crypto vector using Node/OpenSSL. No additional packages are required.
+With Node 22+, `node scripts/check-interop-vector.cjs` independently verifies the published generic encryption and opaque hello/acknowledgment vectors using Node/OpenSSL. No additional packages are required.
 
 ## Add to an Apple app
 
 Add the package in Xcode or in your package manifest:
 
 ```swift
-.package(url: "https://github.com/arashparnia/pechpech.git", .upToNextMinor(from: "0.2.0"))
+.package(url: "https://github.com/arashparnia/pechpech.git", .upToNextMinor(from: "0.3.0"))
 ```
 
 Depend on `.product(name: "PechPechCore", package: "pechpech")` and, for native links, `.product(name: "PechPechApple", package: "pechpech")`.
@@ -92,20 +92,23 @@ Retries use the saved immutable record: `try node.resume(message.id)`. `node.pau
 
 - [Architecture](docs/architecture.md): layers, persistence, routing, and application boundaries.
 - [Wire protocol](docs/protocol.md): versioned encoding, cryptography, control frames, framing, and synthetic interoperability vectors.
+- [Host-managed profiles](docs/opaque-profiles.md): reuse an existing encrypted envelope and durable store through `OpaquePacketRouter`.
 - [Integration](docs/integration.md): identity storage, enrollment, lifecycle, permissions, and custom transports.
+- [Packaging and privacy](docs/packaging.md): SwiftPM products, bundled notices/manifests, and independent consumer checks.
 - [Qualification](docs/qualification.md): software evidence and the physical-device matrix still required.
-- [Current verification record](docs/verification-2026-10-04.md): checks completed for this release and their limits.
+- [Current verification record](docs/verification-0.3-2026-10-04.md): checks completed for this release and their limits.
+- [0.2 verification record](docs/verification-2026-10-04.md): retained evidence for the prior release.
 - [Upgrade guide](docs/migration-0.2.md): module, wire, storage, and version boundaries.
 
 Endpoint encryption uses X25519, HKDF-SHA256, AES-256-GCM, and Ed25519. Relays can see routing metadata and traffic timing, but not message contents. This initial design does not provide forward secrecy against later compromise of the recipient's long-term agreement key. Hosts own secure key storage, at-rest protection, trust revocation, and business permissions. See the [security policy](SECURITY.md).
 
 This is an application protocol over BLE/TCP, not Bluetooth SIG Mesh. Apple's peer-to-peer option permits eligible paths; it does not force a radio path or guarantee reachability. Tests do not establish a background delivery or arbitrary-hop latency guarantee. The initial deployment scope is foreground native apps.
 
-PechPech has fresh Git history, its own discovery identifiers, cryptographic domain, and storage namespace. Existing GARVI installations and their deployed protocol are unchanged; adopting this SDK there requires a reviewed migration.
+PechPech has fresh Git history, its own discovery identifiers, cryptographic domains, and generic storage namespace. A host with an existing encrypted protocol can use `OpaquePacketRouter` with explicit codecs and durable hooks; its adoption and migration still require application-specific verification.
 
 ## Contribute
 
-Issues, documentation, interoperability work, and small, tested pull requests are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md). CI runs tests, a release build, an iOS simulator library compile, and the injected-link demo on Apple Silicon and Intel macOS.
+Issues, documentation, interoperability work, and small, tested pull requests are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) and the [code of conduct](CODE_OF_CONDUCT.md). Use [SUPPORT.md](SUPPORT.md) for help and see [project governance](GOVERNANCE.md) for compatibility and release decisions. CI runs tests, a release build, an iOS simulator library compile, the independent crypto-vector checker, an external consumer build, resource validation, and the injected-link demo on Apple Silicon and Intel macOS.
 
 Useful next contributions include qualified physical-device evidence, scheduling work off the UI actor, reviewed retention policies, and independent Android interoperability. Report vulnerabilities through [SECURITY.md](SECURITY.md), without posting private keys or application data.
 

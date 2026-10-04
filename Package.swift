@@ -10,8 +10,10 @@ let package = Package(
         .executable(name: "pechpech-demo", targets: ["PechPechDemo"])
     ],
     targets: [
-        .target(name: "PechPechCore", linkerSettings: [.linkedLibrary("sqlite3")]),
-        .target(name: "PechPechApple", dependencies: ["PechPechCore"]),
+        .target(name: "PechPechCore", resources: [.process("Resources")],
+                linkerSettings: [.linkedLibrary("sqlite3")]),
+        .target(name: "PechPechApple", dependencies: ["PechPechCore"],
+                resources: [.process("Resources")]),
         .executableTarget(name: "PechPechDemo", dependencies: ["PechPechCore", "PechPechApple"]),
         .testTarget(name: "PechPechCoreTests", dependencies: ["PechPechCore"], resources: [.copy("Fixtures")]),
         .testTarget(name: "PechPechAppleTests", dependencies: ["PechPechApple", "PechPechCore"])

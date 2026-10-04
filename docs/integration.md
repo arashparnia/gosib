@@ -2,7 +2,11 @@
 
 The first package supports native iOS 16+ and macOS 13+ applications using Swift 5.9+. It has no external package dependencies. Add `PechPechCore` for protocol and storage, and `PechPechApple` for the native BLE/TCP adapters. The root [README](../README.md) and `pechpech-demo` provide a runnable core example.
 
-These instructions target PechPech 0.2.0 and wire version 2. The prior 0.1 release is incompatible. Choose a dedicated current-release database or complete a reviewed migration using [the upgrade guide](migration-0.2.md); preserve unresolved records and private identities.
+Both library products include SwiftPM resource bundles with a privacy manifest and full MIT notice. Retain them in the distributed host and review the app's own data disclosures; see [packaging and privacy](packaging.md).
+
+These generic-node instructions target PechPech 0.3.0 and wire version 2, with the same storage namespace as 0.2. The prior 0.1 release is incompatible. Choose a dedicated current-release database or complete a reviewed migration using [the upgrade guide](migration-0.2.md); preserve unresolved records and private identities.
+
+If the host already owns an encrypted envelope, persistent keys and durable message/business ledgers, consider the separate [opaque profile integration](opaque-profiles.md). `OpaquePacketRouter` shares native transport and neighbor authentication while preserving host-owned bytes and persistence; it does not automatically convert data to the generic `MeshStore` or receipt model.
 
 ## Trust and application behavior
 
@@ -40,7 +44,7 @@ Messages carry immutable bytes, not an application transaction. Define a version
 
 Restore pending outgoing messages, inbox processing state and receipts after restart. Do not regenerate a message ID for a retry or show a local send/relay acknowledgment as endpoint success. Expose missing routes, backpressure, denied permissions and storage errors in the host UI. A pending message can remain uncertain after an app closes.
 
-`enqueue(to:channel:payload:id:priority:startSending:)` validates and persists a new immutable message, then starts its transmission if requested and the node is running. For a saved message, use `resume(messageID)` rather than constructing a new message with the old ID and a different creation time. `pause(messageID)` stops new origin attempts; already transmitted packets cannot be recalled. `stop()` closes links and pauses owned work. `start()` resumes foreign relaying and receipt retries while restored outgoing messages stay paused until explicit `resume`.
+`enqueue(to:channel:payload:id:priority:startSending:)` validates and persists a new immutable message, then starts its transmission if requested and the node is running. In 0.3, repeating a caller-supplied ID with the same recipient, channel, payload and priority reuses the saved creation time and delivered state; conflicting fields fail. For an already saved message, prefer explicit `resume(messageID)` rather than constructing a new `Message` with the old ID and a different creation time. `pause(messageID)` stops new origin attempts; already transmitted packets cannot be recalled. `stop()` closes links and pauses owned work. `start()` resumes foreign relaying and receipt retries while restored outgoing messages stay paused until explicit `resume`.
 
 `onMessage` reports newly stored messages and `onDelivery` reports a newly saved matching endpoint receipt. Callbacks are not a durable business-processing queue. After restart, read `store.inbox()` and your application processing ledger to recover unfinished actions, and query saved receipts to restore delivery state.
 

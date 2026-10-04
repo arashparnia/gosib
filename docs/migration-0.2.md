@@ -2,6 +2,8 @@
 
 PechPech (پچ‌پچ) means whispering. Release 0.2.0 applies the new name to the public SDK and introduces wire version 2 with distinct discovery, cryptographic and storage namespaces. This is a breaking release, not a cosmetic substitution on an established network.
 
+PechPech 0.3 retains these generic `MeshNode` wire/storage namespaces. It separately adds [host-managed opaque profiles](opaque-profiles.md) with their own control domains; that integration does not automatically migrate a prior store or redefine a host's business receipt.
+
 ## Compatibility
 
 | Boundary | Current 0.2 value | Upgrade effect |
@@ -22,13 +24,13 @@ The versioned host payload/channel schema is separate from the transport wire ve
 
 ## New deployments
 
-Use current modules with a new, dedicated SDK database and an explicitly chosen stable Keychain namespace. Enroll/pin the intended endpoint and authorize senders through the application. Do not use a broad 0.x dependency range that permits unreviewed breaking upgrades; the README uses `.upToNextMinor(from: "0.2.0")`.
+Use current modules with a new, dedicated SDK database and an explicitly chosen stable Keychain namespace. Enroll/pin the intended endpoint and authorize senders through the application. Do not use a broad 0.x dependency range that permits unreviewed breaking upgrades; the README uses `.upToNextMinor(from: "0.3.0")`.
 
 All participants on a usable path need the current protocol. A prior-release intermediary cannot forward current frames merely because it is nearby. There is no mixed-version relay bridge in 0.2.
 
 ## Existing deployments
 
-Preserve the existing database and secure identity before changing the host. A file containing unrecognized user tables is rejected before current tables or WAL configuration are created; that rejection protects records and requires an explicit next step. Never clear the error by deleting the database, resetting keys, rewriting table prefixes or bulk resubmitting pending messages with fresh IDs.
+Preserve the existing database and secure identity before changing the host. A file containing unrecognized user tables is rejected before current tables or WAL configuration are created. In 0.3 the guard also rejects unexpected views/triggers/custom indexes and incompatible table definitions/columns. That rejection protects records and requires an explicit next step. Never clear the error by deleting the database, resetting keys, rewriting table prefixes or bulk resubmitting pending messages with fresh IDs.
 
 A safe application migration must account for both ends of each message and their business processing:
 
@@ -40,7 +42,7 @@ A safe application migration must account for both ends of each message and thei
 
 There is no production migration or bridge utility in this release. A host without reviewed migration code can start a separate deployment for new traffic while retaining the earlier deployment for its unresolved history. Starting a new database does not establish that old pending work is safe to replay or discard.
 
-Existing GARVI installations are unaffected. They retain their own production wire protocol and stores; adopting this SDK requires a separate reviewed application adapter and migration.
+This generic migration guide does not authorize changing a GARVI installation's keys, encrypted envelope, durable records or kitchen semantics. A host-managed profile requires its own adapter and deployment evidence.
 
 ## Evidence
 

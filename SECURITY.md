@@ -1,6 +1,6 @@
 # Security policy
 
-PechPech 0.2 is experimental. It has no independent cryptographic audit or production security certification. Security fixes target the latest published 0.2 release and the current `main` branch; older snapshots are not maintained separately. The prior 0.1 release is incompatible with the current wire and storage namespaces; see [migration](docs/migration-0.2.md).
+PechPech is experimental. It has no independent cryptographic audit or production security certification. Security fixes target the latest published release and the current `main` branch; older snapshots are not maintained separately. The prior 0.1 release is incompatible with the generic node's current wire and storage namespaces; see [migration](docs/migration-0.2.md).
 
 ## Report a vulnerability privately
 
@@ -11,6 +11,8 @@ If private reporting is unavailable, open an issue asking for a private reportin
 ## Security boundaries
 
 PechPech authenticates cryptographic senders and encrypts endpoint payloads. Applications must establish trust in the intended recipient identity and decide which authenticated senders are authorized. Discovery, radio distance and relay participation do not grant access to application actions.
+
+The alternative `OpaquePacketRouter` authenticates neighbors and routes host-owned packets. Its descriptor validation does not authenticate/decrypt an arbitrary host envelope or authorize a business action. The host's codec and asynchronous durable hooks must enforce those boundaries; see [opaque profiles](docs/opaque-profiles.md). A profile-specific next-hop acknowledgment remains distinct from an endpoint/business receipt.
 
 An endpoint receipt confirms that the recipient stored the payload bytes durably. It does not confirm a transaction, human approval or other business result. Applications need their own authorization, idempotency and durable business-result protocol.
 

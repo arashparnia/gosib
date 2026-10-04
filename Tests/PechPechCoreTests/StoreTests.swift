@@ -61,6 +61,60 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(try reopened.pending().first?.message, original)
     }
 
+    func testIncompatibleCurrentNamespaceSchemaIsRejectedBeforeMutation() throws {
+        for definition in [
+            "id TEXT,payload BLOB NOT NULL,hash BLOB NOT NULL,receipt BLOB",
+            "id TEXT PRIMARY KEY,payload BLOB NOT NULL,hash BLOB NOT NULL,receipt BLOB,future_version INTEGER NOT NULL DEFAULT 3",
+            "id TEXT PRIMARY KEY,payload BLOB NOT NULL CHECK(length(payload)<1024),hash BLOB NOT NULL,receipt BLOB"
+        ] {
+            let path = url()
+            try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try execute("CREATE TABLE pechpech_outbox(\(definition)); INSERT INTO pechpech_outbox(id,payload,hash) VALUES('sentinel',X'010203',X'040506');", at: path)
+            XCTAssertThrowsError(try MeshStore(url: path))
+            var db: OpaquePointer?
+            XCTAssertEqual(sqlite3_open(path.path, &db), SQLITE_OK)
+            defer { sqlite3_close(db) }
+            func scalar(_ sql: String) throws -> String {
+                var statement: OpaquePointer?
+                XCTAssertEqual(sqlite3_prepare_v2(db, sql, -1, &statement, nil), SQLITE_OK)
+                defer { sqlite3_finalize(statement) }
+                XCTAssertEqual(sqlite3_step(statement), SQLITE_ROW)
+                return String(cString: try XCTUnwrap(sqlite3_column_text(statement, 0)))
+            }
+            XCTAssertEqual(try scalar("SELECT hex(payload)||':'||hex(hash) FROM pechpech_outbox WHERE id='sentinel';"), "010203:040506")
+            XCTAssertEqual(try scalar("SELECT sql FROM sqlite_master WHERE name='pechpech_outbox';"), "CREATE TABLE pechpech_outbox(\(definition))")
+            XCTAssertEqual(try scalar("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name GLOB 'pechpech_*';"), "1")
+            XCTAssertEqual(try scalar("PRAGMA journal_mode;"), "delete")
+        }
+    }
+
+    func testUnexpectedSchemaObjectsAreRejectedWithoutChangingOriginalRecords() throws {
+        for object in [
+            "CREATE TRIGGER erase_inbox AFTER INSERT ON pechpech_inbox BEGIN DELETE FROM pechpech_inbox WHERE id=NEW.id; END",
+            "CREATE VIEW other_inbox AS SELECT * FROM pechpech_inbox",
+            "CREATE INDEX custom_inbox_hash ON pechpech_inbox(hash)"
+        ] {
+            let path = url()
+            try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try execute("CREATE TABLE pechpech_inbox(id TEXT PRIMARY KEY,payload BLOB NOT NULL,hash BLOB NOT NULL); INSERT INTO pechpech_inbox(id,payload,hash) VALUES('sentinel',X'010203',X'040506'); \(object);", at: path)
+            XCTAssertThrowsError(try MeshStore(url: path))
+            var db: OpaquePointer?
+            XCTAssertEqual(sqlite3_open(path.path, &db), SQLITE_OK)
+            defer { sqlite3_close(db) }
+            func scalar(_ sql: String) throws -> String {
+                var statement: OpaquePointer?
+                XCTAssertEqual(sqlite3_prepare_v2(db, sql, -1, &statement, nil), SQLITE_OK)
+                defer { sqlite3_finalize(statement) }
+                XCTAssertEqual(sqlite3_step(statement), SQLITE_ROW)
+                return String(cString: try XCTUnwrap(sqlite3_column_text(statement, 0)))
+            }
+            XCTAssertEqual(try scalar("SELECT hex(payload)||':'||hex(hash) FROM pechpech_inbox WHERE id='sentinel';"), "010203:040506")
+            XCTAssertEqual(try scalar("SELECT sql FROM sqlite_master WHERE type!='table' AND name NOT GLOB 'sqlite_*';"), object)
+            XCTAssertEqual(try scalar("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name GLOB 'pechpech_*';"), "1")
+            XCTAssertEqual(try scalar("PRAGMA journal_mode;"), "delete")
+        }
+    }
+
     func testForeignSchemaIsRejectedWithoutChangingExistingRowsOrCreatingTables() throws {
         let path = url()
         try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -132,8 +186,8 @@ final class StoreTests: XCTestCase {
         XCTAssertThrowsError(try accept(original, from: sender, at: receiver, store: inbox))
         XCTAssertTrue(try inbox.inbox().isEmpty)
         XCTAssertTrue(try inbox.outgoingReceipts().isEmpty)
-        XCTAssertTrue(try store(receiver, at: path).inbox().isEmpty)
         try execute("DROP TRIGGER fail_returns;", at: path)
+        XCTAssertTrue(try store(receiver, at: path).inbox().isEmpty)
         XCTAssertNoThrow(try accept(original, from: sender, at: receiver, store: inbox))
         XCTAssertEqual(try inbox.inbox().count, 1)
     }

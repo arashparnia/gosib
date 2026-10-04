@@ -28,10 +28,20 @@ jobs:
           persist-credentials: false
       - name: Toolchain
         run: swift --version
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Independent cryptographic vector
+        run: node scripts/check-interop-vector.cjs
       - name: Tests
         run: swift test
       - name: Release build
         run: swift build -c release
+      - name: SwiftPM resource validation
+        run: python3 scripts/check-package-resources.py
+      - name: External library consumer
+        run: swift build --package-path Examples/PackageConsumer -c release
       - name: iOS Simulator compile
         run: >-
           xcodebuild -scheme PechPechApple
@@ -39,5 +49,9 @@ jobs:
           -derivedDataPath .build/ios-simulator
           CODE_SIGNING_ALLOWED=NO IPHONEOS_DEPLOYMENT_TARGET=16.0
           build -quiet
+      - name: iOS resource validation
+        run: >-
+          python3 scripts/check-package-resources.py
+          --products-dir .build/ios-simulator/Build/Products/Debug-iphonesimulator
       - name: Injected-link demo
         run: swift run pechpech-demo

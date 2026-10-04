@@ -102,4 +102,46 @@ assert.equal(signed.signature, fixture.signatureBase64);
 assert.ok(crypto.verify(null, Buffer.concat([aad, envelope]), signingPublic, Buffer.from(signed.signature, 'base64')));
 assert.equal(crypto.createHash('sha256').update(Buffer.from(fixture.messageJSON, 'utf8')).digest('base64'), fixture.messageHashBase64);
 
-console.log('PASS: PechPech v2 synthetic vector: exact canonical bytes, public identities/address hashes, Ed25519 signatures, bidirectional X25519 agreement, HKDF-SHA256 and authenticated AES-256-GCM decryption verified with Node/OpenSSL. No radio or platform implementation claim.');
+const opaqueFixture = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'Tests', 'PechPechCoreTests', 'Fixtures', 'opaque-control-v1.json'), 'utf8'));
+assert.equal(opaqueFixture.syntheticInputs,
+  'Ed25519 seed=11 hex repeated 32; X25519=12 hex repeated 32; immutableHash=13 hex repeated 32');
+const opaqueSigning = syntheticPrivateKey('Ed25519', 17);
+const opaqueIdentity = publicIdentity(opaqueSigning, syntheticPrivateKey('X25519', 18));
+const opaqueAddress = address(opaqueIdentity);
+const opaqueProfile = 'com.example.protocol/v1';
+const opaqueChallenge = '11111111-1111-4111-8111-111111111111';
+const opaqueEcho = '22222222-2222-4222-8222-222222222222';
+const opaquePacketID = '33333333-3333-4333-8333-333333333333';
+const opaqueHash = Buffer.alloc(32, 19).toString('base64');
+const opaqueRoutes = { [opaqueAddress]: 0, ['ab'.repeat(32)]: 2 };
+assert.equal(opaqueFixture.publicIdentityJSON, canonical(opaqueIdentity));
+assert.equal(opaqueFixture.address, opaqueAddress);
+assert.equal(opaqueFixture.profile, opaqueProfile);
+assert.equal(opaqueFixture.challenge, opaqueChallenge);
+assert.equal(opaqueFixture.echo, opaqueEcho);
+assert.equal(opaqueFixture.packetID, opaquePacketID);
+assert.equal(opaqueFixture.immutableHashBase64, opaqueHash);
+assert.equal(opaqueFixture.routesJSON, canonical(opaqueRoutes));
+const opaqueClaims = {
+  protocolName: 'pechpech-opaque-link-1', profile: opaqueProfile, identity: opaqueIdentity,
+  challenge: opaqueChallenge, echo: opaqueEcho, routes: opaqueRoutes
+};
+const opaqueClaimsWithoutEcho = { ...opaqueClaims };
+delete opaqueClaimsWithoutEcho.echo;
+const opaqueAckClaims = {
+  protocolName: 'pechpech-opaque-ack-1', profile: opaqueProfile, senderID: opaqueAddress,
+  packetID: opaquePacketID, immutableHash: opaqueHash, echo: opaqueEcho
+};
+for (const [name, claims, kind] of [
+  ['hello', opaqueClaims, 'pechpech-opaque-hello'],
+  ['helloWithoutEcho', opaqueClaimsWithoutEcho, 'pechpech-opaque-hello'],
+  ['ack', opaqueAckClaims, 'pechpech-opaque-stored']
+]) {
+  const signature = crypto.sign(null, Buffer.from(canonical(claims), 'utf8'), opaqueSigning).toString('base64');
+  assert.equal(opaqueFixture[name + 'ClaimsJSON'], canonical(claims));
+  assert.equal(opaqueFixture[name + 'SignatureBase64'], signature);
+  assert.equal(opaqueFixture[name + 'JSON'], canonical({ kind, claims, signature }));
+  assert.ok(crypto.verify(null, Buffer.from(canonical(claims), 'utf8'), crypto.createPublicKey(opaqueSigning), Buffer.from(signature, 'base64')));
+}
+
+console.log('PASS: PechPech generic-v2 encryption and opaque-control-v1 hello/ACK vectors: exact canonical bytes, identities/address hashes, Ed25519 signatures, bidirectional X25519 agreement, HKDF-SHA256 and authenticated AES-256-GCM decryption verified with Node/OpenSSL. Synthetic inputs only; no radio or platform implementation claim.');

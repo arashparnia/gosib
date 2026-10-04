@@ -40,6 +40,9 @@ public enum NodeEvent: Equatable, Sendable {
     /// Authorization is required and application-defined. For a relay-only node, return false.
     public init(identity: Identity, store: MeshStore, links: [any PacketLink],
                 authorize: @escaping (Message, PublicIdentity) -> Bool) throws {
+        guard Set(links.map { ObjectIdentifier($0) }).count == links.count else {
+            throw PechPechError.invalid("Use a distinct packet-link instance for each adapter.")
+        }
         self.identity = identity; self.store = store; self.links = links; self.authorize = authorize
         try store.bindIdentity(identity.publicIdentity)
         for (index, link) in links.enumerated() {
@@ -58,7 +61,13 @@ public enum NodeEvent: Equatable, Sendable {
     public func start() {
         guard !running else { return }
         running = true
-        for link in links { link.start(nodeName: identity.publicIdentity.id) }
+        for link in links {
+            // Native adapter callbacks can synchronously ask the host to stop.
+            // Do not start another radio or a retry task after that explicit stop.
+            guard running else { return }
+            link.start(nodeName: identity.publicIdentity.id)
+        }
+        guard running else { return }
         timer = Task { [weak self] in
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(1)) } catch { return }
@@ -80,8 +89,21 @@ public enum NodeEvent: Equatable, Sendable {
                                           id: UUID = UUID(), priority: PacketPriority = .urgent,
                                           startSending: Bool = true) throws -> Message {
         guard recipient.id != identity.publicIdentity.id else { throw PechPechError.invalid("Use local storage for self-addressed messages.") }
-        let message = try Message(id: id, senderID: identity.publicIdentity.id, destinationID: recipient.id,
+        let message: Message
+        if let saved = try store.outgoing(messageID: id) {
+            // Retry the saved creation time and bytes rather than constructing a
+            // different immutable message for the same caller-supplied ID.
+            guard saved.recipient == recipient, saved.priority == priority,
+                  saved.message.senderID == identity.publicIdentity.id,
+                  saved.message.channel == channel, saved.message.payload == payload else {
+                throw PechPechError.messageConflict
+            }
+            message = saved.message
+            if try store.receipt(messageID: id) != nil { return message }
+        } else {
+            message = try Message(id: id, senderID: identity.publicIdentity.id, destinationID: recipient.id,
                                   channel: channel, payload: payload)
+        }
         // Qualify the actual wrapped packet size before committing an unusable outbox entry.
         let packet = try EndpointCrypto.seal(.message(message), from: identity, to: recipient, priority: priority)
         guard try WireCoding.encode(MeshFrame.packet(packet)).count <= RelayPacket.maximumBytes else {

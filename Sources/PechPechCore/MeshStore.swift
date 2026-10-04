@@ -48,28 +48,78 @@ public final class MeshStore: @unchecked Sendable {
                   try Self.textScalar(connection, "PRAGMA synchronous;") == "2" else {
                 throw PechPechError.storage("WAL/FULL durability could not be enabled.")
             }
-            try Self.exec(connection, """
+            try Self.transaction(connection) {
+                try Self.exec(connection, """
                 CREATE TABLE IF NOT EXISTS pechpech_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS pechpech_outbox (id TEXT PRIMARY KEY, payload BLOB NOT NULL, hash BLOB NOT NULL, receipt BLOB);
                 CREATE TABLE IF NOT EXISTS pechpech_inbox (id TEXT PRIMARY KEY, payload BLOB NOT NULL, hash BLOB NOT NULL);
                 CREATE TABLE IF NOT EXISTS pechpech_returns (id TEXT PRIMARY KEY, packet BLOB NOT NULL);
                 CREATE TABLE IF NOT EXISTS pechpech_relays (id TEXT PRIMARY KEY, payload BLOB NOT NULL, priority INTEGER NOT NULL, expires INTEGER NOT NULL, origin TEXT NOT NULL);
                 """)
+            }
             db = connection
         } catch { sqlite3_close_v2(connection); throw error }
     }
     deinit { if let db { sqlite3_close_v2(db) } }
 
     private static func requireCompatibleSchema(_ db: OpaquePointer) throws {
-        let allowed: Set<String> = ["pechpech_metadata", "pechpech_outbox", "pechpech_inbox", "pechpech_returns", "pechpech_relays"]
-        let query = try statement(db, "SELECT name FROM sqlite_master WHERE type='table' AND name NOT GLOB 'sqlite_*';")
+        let columns: [String: [(String, String, Int32, Int32)]] = [
+            "pechpech_metadata": [("key", "TEXT", 0, 1), ("value", "TEXT", 1, 0)],
+            "pechpech_outbox": [("id", "TEXT", 0, 1), ("payload", "BLOB", 1, 0), ("hash", "BLOB", 1, 0), ("receipt", "BLOB", 0, 0)],
+            "pechpech_inbox": [("id", "TEXT", 0, 1), ("payload", "BLOB", 1, 0), ("hash", "BLOB", 1, 0)],
+            "pechpech_returns": [("id", "TEXT", 0, 1), ("packet", "BLOB", 1, 0)],
+            "pechpech_relays": [("id", "TEXT", 0, 1), ("payload", "BLOB", 1, 0), ("priority", "INTEGER", 1, 0), ("expires", "INTEGER", 1, 0), ("origin", "TEXT", 1, 0)]
+        ]
+        let objects = try statement(db, "SELECT name FROM sqlite_master WHERE type!='table' AND name NOT GLOB 'sqlite_*' LIMIT 1;")
+        defer { sqlite3_finalize(objects) }
+        switch sqlite3_step(objects) {
+        case SQLITE_DONE: break
+        case SQLITE_ROW:
+            throw PechPechError.storage("This database has unsupported schema objects. Preserve its records and perform a reviewed migration before upgrading.")
+        default: throw error(db)
+        }
+        let query = try statement(db, "SELECT name,sql FROM sqlite_master WHERE type='table' AND name NOT GLOB 'sqlite_*';")
         defer { sqlite3_finalize(query) }
         while true {
             switch sqlite3_step(query) {
             case SQLITE_DONE: return
             case SQLITE_ROW:
-                guard let name = sqlite3_column_text(query, 0), allowed.contains(String(cString: name)) else {
+                guard let nameBytes = sqlite3_column_text(query, 0), let expected = columns[String(cString: nameBytes)] else {
                     throw PechPechError.storage("This database uses another storage namespace. Preserve its records and perform a reviewed migration before upgrading.")
+                }
+                // Names alone do not identify a compatible schema. Check before
+                // changing journal mode or adding tables to an incompatible file.
+                let name = String(cString: nameBytes)
+                let fields = expected.map { column in
+                    column.0 + " " + column.1 + (column.3 == 1 ? " PRIMARY KEY" : column.2 == 1 ? " NOT NULL" : "")
+                }.joined(separator: ",")
+                let definition = "CREATE TABLE \(name)(\(fields))"
+                func normalized(_ sql: String) -> String { sql.filter { !$0.isWhitespace }.uppercased() }
+                guard let originalSQL = sqlite3_column_text(query, 1),
+                      normalized(String(cString: originalSQL)) == normalized(definition) else {
+                    throw PechPechError.storage("This database has an incompatible PechPech schema. Preserve its records and perform a reviewed migration before upgrading.")
+                }
+                let info = try statement(db, "PRAGMA table_info(\(name));")
+                defer { sqlite3_finalize(info) }
+                var index = 0
+                while true {
+                    let step = sqlite3_step(info)
+                    if step == SQLITE_DONE { break }
+                    guard step == SQLITE_ROW else { throw error(db) }
+                    guard index < expected.count,
+                          let actualName = sqlite3_column_text(info, 1),
+                          let actualType = sqlite3_column_text(info, 2),
+                          String(cString: actualName) == expected[index].0,
+                          String(cString: actualType).uppercased() == expected[index].1,
+                          sqlite3_column_int(info, 3) == expected[index].2,
+                          sqlite3_column_type(info, 4) == SQLITE_NULL,
+                          sqlite3_column_int(info, 5) == expected[index].3 else {
+                        throw PechPechError.storage("This database has an incompatible PechPech schema. Preserve its records and perform a reviewed migration before upgrading.")
+                    }
+                    index += 1
+                }
+                guard index == expected.count else {
+                    throw PechPechError.storage("This database has an incompatible PechPech schema. Preserve its records and perform a reviewed migration before upgrading.")
                 }
             default: throw error(db)
             }
@@ -116,6 +166,13 @@ public final class MeshStore: @unchecked Sendable {
 
     public func pending() throws -> [PendingMessage] {
         try database { try Self.rows($0, "SELECT payload FROM pechpech_outbox WHERE receipt IS NULL ORDER BY rowid;", as: PendingMessage.self) }
+    }
+    /// The immutable saved snapshot, including an already delivered message.
+    public func outgoing(messageID: UUID) throws -> PendingMessage? {
+        try database { db in
+            guard let bytes = try Self.blobRow(db, "SELECT payload FROM pechpech_outbox WHERE id=?;", messageID.uuidString) else { return nil }
+            return try WireCoding.decode(PendingMessage.self, from: bytes)
+        }
     }
     public func inbox() throws -> [ReceivedMessage] {
         try database { try Self.rows($0, "SELECT payload FROM pechpech_inbox ORDER BY rowid;", as: ReceivedMessage.self) }

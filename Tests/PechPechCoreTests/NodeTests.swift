@@ -16,7 +16,7 @@ import XCTest
     var sent: [MeshFrame] = []
     var drop: ((MeshFrame, String) -> Bool)?
     var reject: ((MeshFrame, String) -> Bool)?
-    func start(nodeName: String) { name = nodeName; running = true }
+    func start(nodeName: String) { name = nodeName; running = true; onState?("Started") }
     func stop() {
         running = false
         for other in Array(peers.values) { disconnect(other) }
@@ -144,6 +144,44 @@ final class NodeTests: XCTestCase {
         try restarted.resume(original.id)
         XCTAssertEqual(try receiver.store.inbox().first?.message, original)
         XCTAssertTrue(try restarted.store.pending().isEmpty)
+    }
+
+    @MainActor func testStopDuringAdapterStartDoesNotStartLaterAdapters() throws {
+        let identity = Identity(), first = MemoryLink(), second = MemoryLink()
+        let mesh = try MeshNode(identity: identity, store: MeshStore(url: url()), links: [first, second], authorize: { _, _ in false })
+        defer { mesh.stop() }
+        mesh.onEvent = { event in
+            if case .linkState("Started") = event { mesh.stop() }
+        }
+        mesh.start()
+        XCTAssertFalse(first.running)
+        XCTAssertFalse(second.running)
+        XCTAssertEqual(second.name, "")
+        mesh.onEvent = nil
+        mesh.start()
+        XCTAssertTrue(first.running)
+        XCTAssertTrue(second.running)
+    }
+
+    @MainActor func testEnqueueKnownIDReusesSavedSnapshotAndDoesNotResendDeliveredMessage() throws {
+        let a = Identity(), b = Identity(), la = MemoryLink(), lb = MemoryLink()
+        let sender = try node(a, la), receiver = try node(b, lb)
+        defer { sender.stop(); receiver.stop() }
+        let original = try Message(senderID: a.publicIdentity.id, destinationID: b.publicIdentity.id,
+                                   channel: "saved", payload: Data([3]), createdAt: 1)
+        try sender.store.queue(original, recipient: b.publicIdentity)
+        sender.start(); receiver.start(); la.connect(lb)
+        let retried = try sender.enqueue(to: b.publicIdentity, channel: original.channel, payload: original.payload, id: original.id)
+        XCTAssertEqual(retried, original)
+        XCTAssertEqual(try sender.store.outgoing(messageID: original.id)?.message, original)
+        XCTAssertEqual(try receiver.store.inbox().first?.message, original)
+        XCTAssertNotNil(try sender.store.receipt(messageID: original.id))
+        let before = la.packetCount
+        XCTAssertEqual(try sender.enqueue(to: b.publicIdentity, channel: original.channel, payload: original.payload, id: original.id), original)
+        XCTAssertEqual(la.packetCount, before)
+        XCTAssertThrowsError(try sender.enqueue(to: b.publicIdentity, channel: original.channel, payload: Data([4]), id: original.id))
+        XCTAssertThrowsError(try sender.enqueue(to: b.publicIdentity, channel: "changed", payload: original.payload, id: original.id))
+        XCTAssertThrowsError(try sender.enqueue(to: b.publicIdentity, channel: original.channel, payload: original.payload, id: original.id, priority: .bulk))
     }
 
     @MainActor func testAuthorizationRejectsAuthenticatedSenderWithoutFalseReceipt() throws {

@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Integration questions and discussion
+    url: https://github.com/arashparnia/pechpech/discussions
+    about: Ask for help or discuss a proposal before filing a reproducible bug.
+  - name: Report a security vulnerability privately
+    url: https://github.com/arashparnia/pechpech/security/advisories/new
+    about: Do not post exploit details, private keys or operational data in public issues.
+  - name: Conduct concerns
+    url: https://github.com/arashparnia/pechpech/blob/main/CODE_OF_CONDUCT.md
+    about: Follow the private reporting procedure in the code of conduct.
