@@ -10,6 +10,7 @@ import XCTest
     var onMessage: ((Data, String) -> Void)?
     var onLinkReady: ((String) -> Void)?
     var onDisconnected: ((String) -> Void)?
+    var onWorkAvailable: (() -> Void)?
     var name = ""
     var running = false
     var peers: [String: MemoryLink] = [:]
@@ -73,7 +74,7 @@ final class NodeTests: XCTestCase {
         return RelayPacket(header: header, encrypted: try XCTUnwrap(box.combined), hopsRemaining: 8)
     }
 
-    @MainActor func testTwoHopDeliveryAndSeparateDurableRelayAcknowledgment() throws {
+    @MainActor func testTwoHopDeliveryAndSeparateDurableRelayAcknowledgment() async throws {
         let a = Identity(), b = Identity(), r = Identity(), la = MemoryLink(), lb = MemoryLink(), lr = MemoryLink()
         let sender = try node(a, la), receiver = try node(b, lb), relay = try node(r, lr, authorize: { _, _ in false })
         defer { sender.stop(); receiver.stop(); relay.stop() }
@@ -90,7 +91,7 @@ final class NodeTests: XCTestCase {
         XCTAssertTrue(lr.sent.contains { if case .stored = $0 { return true }; return false })
     }
 
-    @MainActor func testLostEndpointReceiptLeavesPendingUntilAuthenticatedRetry() throws {
+    @MainActor func testLostEndpointReceiptLeavesPendingUntilAuthenticatedRetry() async throws {
         let a = Identity(), b = Identity(), la = MemoryLink(), lb = MemoryLink()
         let sender = try node(a, la), receiver = try node(b, lb)
         defer { sender.stop(); receiver.stop() }
@@ -110,7 +111,7 @@ final class NodeTests: XCTestCase {
         XCTAssertTrue(try receiver.store.outgoingReceipts().isEmpty)
     }
 
-    @MainActor func testReceiptReturnsViaNewRelayAfterOutboundChainDisappears() throws {
+    @MainActor func testReceiptReturnsViaNewRelayAfterOutboundChainDisappears() async throws {
         let a = Identity(), b = Identity(), r1 = Identity(), r2 = Identity()
         let la = MemoryLink(), lb = MemoryLink(), l1 = MemoryLink(), l2 = MemoryLink()
         let sender = try node(a, la), receiver = try node(b, lb)
@@ -134,7 +135,7 @@ final class NodeTests: XCTestCase {
         XCTAssertTrue(try alternate.store.inbox().isEmpty)
     }
 
-    @MainActor func testStopAndRestartDoNotResumeOldIntentUntilExplicitResume() throws {
+    @MainActor func testStopAndRestartDoNotResumeOldIntentUntilExplicitResume() async throws {
         let a = Identity(), b = Identity(), la = MemoryLink(), lb = MemoryLink(), path = url()
         let sender = try node(a, la, path: path), receiver = try node(b, lb)
         defer { sender.stop(); receiver.stop() }
@@ -152,7 +153,7 @@ final class NodeTests: XCTestCase {
         XCTAssertTrue(try restarted.store.pending().isEmpty)
     }
 
-    @MainActor func testStopDuringAdapterStartDoesNotStartLaterAdapters() throws {
+    @MainActor func testStopDuringAdapterStartDoesNotStartLaterAdapters() async throws {
         let identity = Identity(), first = MemoryLink(), second = MemoryLink()
         let mesh = try MeshNode(identity: identity, store: MeshStore(url: url()), links: [first, second], authorize: { _, _ in false })
         defer { mesh.stop() }
@@ -169,7 +170,7 @@ final class NodeTests: XCTestCase {
         XCTAssertTrue(second.running)
     }
 
-    @MainActor func testEnqueueKnownIDReusesSavedSnapshotAndDoesNotResendDeliveredMessage() throws {
+    @MainActor func testEnqueueKnownIDReusesSavedSnapshotAndDoesNotResendDeliveredMessage() async throws {
         let a = Identity(), b = Identity(), la = MemoryLink(), lb = MemoryLink()
         let sender = try node(a, la), receiver = try node(b, lb)
         defer { sender.stop(); receiver.stop() }
@@ -190,7 +191,7 @@ final class NodeTests: XCTestCase {
         XCTAssertThrowsError(try sender.enqueue(to: b.publicIdentity, channel: original.channel, payload: original.payload, id: original.id, priority: .bulk))
     }
 
-    @MainActor func testRetryRejectsCanonicallyEquivalentButDifferentChannelBytes() throws {
+    @MainActor func testRetryRejectsCanonicallyEquivalentButDifferentChannelBytes() async throws {
         let a = Identity(), b = Identity(), link = MemoryLink(), sender = try node(a, link)
         let original = try sender.enqueue(to: b.publicIdentity, channel: "caf\u{00e9}", payload: Data([1]))
         XCTAssertThrowsError(try sender.enqueue(to: b.publicIdentity, channel: "cafe\u{0301}",
@@ -200,7 +201,7 @@ final class NodeTests: XCTestCase {
         XCTAssertEqual(try sender.store.pending().first?.message, original)
     }
 
-    @MainActor func testStopCallbackIsIdempotent() throws {
+    @MainActor func testStopCallbackIsIdempotent() async throws {
         let link = MemoryLink(), mesh = try node(Identity(), link)
         defer { mesh.onPeers = nil; mesh.stop() }
         var callbacks = 0
@@ -214,7 +215,7 @@ final class NodeTests: XCTestCase {
         XCTAssertFalse(link.running)
     }
 
-    @MainActor func testRestartDuringForwardDoesNotSendOldOriginToNewSession() throws {
+    @MainActor func testRestartDuringForwardDoesNotSendOldOriginToNewSession() async throws {
         let a = Identity(), b = Identity(), c = Identity(), destination = Identity()
         let la = MemoryLink(), lb = MemoryLink(), lc = MemoryLink()
         let sender = try node(a, la), first = try node(b, lb), second = try node(c, lc)
@@ -237,7 +238,7 @@ final class NodeTests: XCTestCase {
         XCTAssertEqual(la.packetCount, 1)
     }
 
-    @MainActor func testPauseDuringSendStopsFurtherOriginAttempts() throws {
+    @MainActor func testPauseDuringSendStopsFurtherOriginAttempts() async throws {
         let a = Identity(), b = Identity(), c = Identity(), destination = Identity()
         let la = MemoryLink(), lb = MemoryLink(), lc = MemoryLink()
         let sender = try node(a, la), first = try node(b, lb), second = try node(c, lc)
@@ -256,7 +257,7 @@ final class NodeTests: XCTestCase {
         XCTAssertEqual(try sender.store.pending().first?.message, original)
     }
 
-    @MainActor func testRestartRequestedDuringStopWaitsForAllAdaptersToClose() throws {
+    @MainActor func testRestartRequestedDuringStopWaitsForAllAdaptersToClose() async throws {
         let first = MemoryLink(), second = MemoryLink()
         let mesh = try MeshNode(identity: Identity(), store: MeshStore(url: url()), links: [first, second], authorize: { _, _ in false })
         defer { first.onStop = nil; mesh.stop() }
@@ -272,7 +273,7 @@ final class NodeTests: XCTestCase {
         XCTAssertTrue(first.running); XCTAssertTrue(second.running)
     }
 
-    @MainActor func testLaterStopCancelsRestartRequestedDuringAdapterTeardown() throws {
+    @MainActor func testLaterStopCancelsRestartRequestedDuringAdapterTeardown() async throws {
         let first = MemoryLink(), second = MemoryLink()
         let mesh = try MeshNode(identity: Identity(), store: MeshStore(url: url()), links: [first, second], authorize: { _, _ in false })
         defer { first.onStop = nil; second.onStop = nil; mesh.stop() }
@@ -283,7 +284,7 @@ final class NodeTests: XCTestCase {
         XCTAssertFalse(first.running); XCTAssertFalse(second.running)
     }
 
-    @MainActor func testRestartDuringInboxCallbackDoesNotSendObsoleteHopAck() throws {
+    @MainActor func testRestartDuringInboxCallbackDoesNotSendObsoleteHopAck() async throws {
         let a = Identity(), b = Identity(), la = MemoryLink(), lb = MemoryLink()
         let sender = try node(a, la), receiver = try node(b, lb)
         defer { receiver.onMessage = nil; sender.stop(); receiver.stop() }
@@ -301,7 +302,7 @@ final class NodeTests: XCTestCase {
         XCTAssertTrue(try sender.store.pending().isEmpty)
     }
 
-    @MainActor func testCustomAdapterCannotAllocateUnboundedUnauthenticatedHandles() throws {
+    @MainActor func testCustomAdapterCannotAllocateUnboundedUnauthenticatedHandles() async throws {
         let identity = Identity(), other = Identity(), link = MemoryLink(), remote = MemoryLink()
         let mesh = try node(identity, link), neighbor = try node(other, remote)
         defer { mesh.stop(); neighbor.stop() }
@@ -315,7 +316,7 @@ final class NodeTests: XCTestCase {
         XCTAssertEqual(mesh.connectedIdentities, [other.publicIdentity])
     }
 
-    @MainActor func testAuthorizationRejectsAuthenticatedSenderWithoutFalseReceipt() throws {
+    @MainActor func testAuthorizationRejectsAuthenticatedSenderWithoutFalseReceipt() async throws {
         let a = Identity(), b = Identity(), la = MemoryLink(), lb = MemoryLink()
         let sender = try node(a, la), receiver = try node(b, lb, authorize: { _, _ in false })
         defer { sender.stop(); receiver.stop() }
@@ -328,7 +329,7 @@ final class NodeTests: XCTestCase {
         XCTAssertNil(try sender.store.receipt(messageID: original.id))
     }
 
-    @MainActor func testAuthenticatedEnvelopeCannotSpoofMessageSenderOrDestination() throws {
+    @MainActor func testAuthenticatedEnvelopeCannotSpoofMessageSenderOrDestination() async throws {
         let a = Identity(), b = Identity(), stranger = Identity(), la = MemoryLink(), lb = MemoryLink()
         let sender = try node(a, la), receiver = try node(b, lb)
         defer { sender.stop(); receiver.stop() }
@@ -349,7 +350,7 @@ final class NodeTests: XCTestCase {
         XCTAssertTrue(try sender.store.pending().isEmpty)
     }
 
-    @MainActor func testDroppedOrRejectedFinalHelloEchoRecoversWithoutReconnect() throws {
+    @MainActor func testDroppedOrRejectedFinalHelloEchoRecoversWithoutReconnect() async throws {
         for rejectAdmission in [false, true] {
             let a = Identity(), b = Identity(), la = MemoryLink(), lb = MemoryLink()
             let sender = try node(a, la), receiver = try node(b, lb)
@@ -373,7 +374,7 @@ final class NodeTests: XCTestCase {
         }
     }
 
-    @MainActor func testOutboxStorageFailurePreventsAnyPacketTransmission() throws {
+    @MainActor func testOutboxStorageFailurePreventsAnyPacketTransmission() async throws {
         let a = Identity(), b = Identity(), la = MemoryLink(), lb = MemoryLink(), path = url()
         let sender = try node(a, la, path: path), receiver = try node(b, lb)
         defer { sender.stop(); receiver.stop() }
@@ -389,7 +390,7 @@ final class NodeTests: XCTestCase {
         XCTAssertTrue(try sender.store.pending().isEmpty)
     }
 
-    @MainActor func testLinkIdentityCannotChangeUntilDisconnect() throws {
+    @MainActor func testLinkIdentityCannotChangeUntilDisconnect() async throws {
         let a = Identity(), b = Identity(), attacker = Identity(), la = MemoryLink(), lb = MemoryLink()
         let sender = try node(a, la), receiver = try node(b, lb)
         defer { sender.stop(); receiver.stop() }
@@ -403,7 +404,7 @@ final class NodeTests: XCTestCase {
         XCTAssertTrue(try sender.store.pending().isEmpty)
     }
 
-    @MainActor func testNoRouteRemainsDurableAndPauseStopsNewAttempts() throws {
+    @MainActor func testNoRouteRemainsDurableAndPauseStopsNewAttempts() async throws {
         let a = Identity(), b = Identity(), la = MemoryLink(), sender = try node(a, la)
         defer { sender.stop() }
         var events: [NodeEvent] = []
@@ -417,7 +418,91 @@ final class NodeTests: XCTestCase {
         XCTAssertEqual(try sender.store.pending().count, 1)
     }
 
-    @MainActor func testStaleOrWrongPacketRelayAckCannotRetireSpoolOrOwnedMessage() throws {
+    @MainActor func testWritableEventRetriesRefusedOriginWithoutTimerTick() async throws {
+        let a = Identity(), b = Identity(), la = MemoryLink(), lb = MemoryLink()
+        let sender = try node(a, la), receiver = try node(b, lb)
+        defer { sender.stop(); receiver.stop() }
+        sender.setRetryScheduling(.eventDriven); receiver.setRetryScheduling(.eventDriven)
+        sender.start(); receiver.start(); la.connect(lb)
+        la.reject = { frame, _ in if case .packet = frame { return true }; return false }
+        let original = try sender.enqueue(to: b.publicIdentity, channel: "wake", payload: Data([1]))
+        XCTAssertTrue(try receiver.store.inbox().isEmpty)
+        la.reject = nil
+        for _ in 0..<8 { la.onWorkAvailable?() }
+        for _ in 0..<40 { await Task.yield() }
+        XCTAssertEqual(try receiver.store.inbox().first?.message, original)
+        XCTAssertTrue(try sender.store.pending().isEmpty)
+        XCTAssertEqual(la.packetCount, 2, "One origin packet plus its independent endpoint receipt-stored acknowledgment")
+    }
+
+    @MainActor func testEventDrivenSchedulingKeepsLinksWithoutPeriodicRetriesAndPreservesStopIntent() async throws {
+        let a = Identity(), b = Identity(), la = MemoryLink(), lb = MemoryLink()
+        let sender = try node(a, la), receiver = try node(b, lb)
+        defer { sender.stop(); receiver.stop() }
+        sender.setRetryScheduling(.eventDriven); receiver.setRetryScheduling(.eventDriven)
+        sender.start(); receiver.start(); la.connect(lb)
+        la.drop = { frame, _ in if case .packet = frame { return true }; return false }
+        let original = try sender.enqueue(to: b.publicIdentity, channel: "background", payload: Data([1]))
+        let before = la.sent.count
+        try await Task.sleep(for: .milliseconds(1_100))
+        XCTAssertEqual(la.sent.count, before, "Event-driven mode must not rely on a running one-second task")
+        XCTAssertTrue(la.running); XCTAssertTrue(lb.running)
+        la.drop = nil
+        sender.setRetryScheduling(.periodic)
+        XCTAssertTrue(try sender.store.pending().isEmpty)
+        XCTAssertEqual(try receiver.store.inbox().first?.message, original)
+        sender.stop(); sender.setRetryScheduling(.eventDriven); sender.start(); la.connect(lb)
+        XCTAssertEqual(sender.retryScheduling, .eventDriven)
+        let pending = try sender.enqueue(to: b.publicIdentity, channel: "paused", payload: Data([2]), startSending: false)
+        la.onWorkAvailable?()
+        for _ in 0..<40 { await Task.yield() }
+        XCTAssertEqual(try sender.store.pending().map(\.message), [pending])
+        XCTAssertEqual(try receiver.store.inbox().count, 1)
+    }
+
+    @MainActor func testWritableEventDoesNotRepeatAdmittedOriginOrResumeAfterStop() async throws {
+        let a = Identity(), b = Identity(), la = MemoryLink(), lb = MemoryLink()
+        let sender = try node(a, la), receiver = try node(b, lb)
+        defer { sender.stop(); receiver.stop() }
+        sender.start(); receiver.start(); la.connect(lb)
+        la.drop = { frame, _ in if case .packet = frame { return true }; return false }
+        let original = try sender.enqueue(to: b.publicIdentity, channel: "wake", payload: Data([1]))
+        let admitted = la.packetCount
+        for _ in 0..<8 { la.onWorkAvailable?() }
+        for _ in 0..<40 { await Task.yield() }
+        XCTAssertEqual(la.packetCount, admitted)
+        // Work already scheduled before stop must not leak into the replacement session.
+        la.onWorkAvailable?(); sender.stop(); sender.start(); la.connect(lb)
+        la.drop = nil; la.onWorkAvailable?()
+        for _ in 0..<40 { await Task.yield() }
+        XCTAssertEqual(la.packetCount, admitted)
+        XCTAssertTrue(try receiver.store.inbox().isEmpty)
+        XCTAssertEqual(try sender.store.pending().first?.message, original)
+    }
+
+    @MainActor func testSingleFreedQueueSlotServicesPayloadBeforeRedundantHello() async throws {
+        let a = Identity(), b = Identity(), la = MemoryLink(), lb = MemoryLink()
+        let sender = try node(a, la), receiver = try node(b, lb)
+        defer { sender.stop(); receiver.stop() }
+        sender.setRetryScheduling(.eventDriven); receiver.setRetryScheduling(.eventDriven)
+        sender.start(); receiver.start(); la.connect(lb)
+        var full = true
+        la.reject = { _, _ in
+            guard !full else { return true }
+            full = true
+            return false
+        }
+        let original = try sender.enqueue(to: b.publicIdentity, channel: "capacity", payload: Data([1]))
+        XCTAssertTrue(try receiver.store.inbox().isEmpty)
+        full = false
+        la.onWorkAvailable?()
+        for _ in 0..<40 { await Task.yield() }
+        XCTAssertEqual(try receiver.store.inbox().first?.message, original)
+        XCTAssertTrue(try sender.store.pending().isEmpty)
+        XCTAssertEqual(la.packetCount, 1)
+    }
+
+    @MainActor func testStaleOrWrongPacketRelayAckCannotRetireSpoolOrOwnedMessage() async throws {
         let a = Identity(), relayID = Identity(), origin = Identity(), unreachable = Identity()
         let la = MemoryLink(), lr = MemoryLink(), sender = try node(a, la), relay = try node(relayID, lr, authorize: { _, _ in false })
         defer { sender.stop(); relay.stop() }

@@ -12,6 +12,7 @@ public final class BLEPacketLink: NSObject, PacketLink {
     public var onMessage: ((Data, String) -> Void)?
     public var onLinkReady: ((String) -> Void)?
     public var onDisconnected: ((String) -> Void)?
+    public var onWorkAvailable: (() -> Void)?
 
     // One discovery service across rooms. A name or this UUID never grants trust.
     private static let serviceUUID = CBUUID(string: "89B515C0-7D3F-4BD9-AC0B-6EC466823C62")
@@ -57,6 +58,7 @@ public final class BLEPacketLink: NSObject, PacketLink {
         var inFlightPayloadBytes: Int?
         var writeStarted: Date?
         var outbox = BLEOutbox()
+        var pumpingWrites = false
         var inbound = BLEReassembler()
 
         init(peripheral: CBPeripheral, name: String) {
@@ -189,6 +191,7 @@ public final class BLEPacketLink: NSObject, PacketLink {
                          protectCurrent: Bool = false) -> Bool {
         guard outbox.messages.count < Self.maximumQueuedMessages,
               outbox.byteCount + data.count <= Self.maximumQueuedBytes else {
+            outbox.waitingForCapacity = true
             onState?("BLE local queue full; caller retains responsibility for retry")
             return false
         }
@@ -368,15 +371,19 @@ public final class BLEPacketLink: NSObject, PacketLink {
     }
 
     private func pumpWrites(_ link: ClientLink) {
-        guard isCurrent(link), link.ready, link.inFlightPayloadBytes == nil,
+        guard isCurrent(link), link.ready, !link.pumpingWrites, link.inFlightPayloadBytes == nil,
               link.peripheral.state == .connected, let characteristic = link.characteristic,
               !link.outbox.messages.isEmpty else { return }
+        let token = generation
+        link.pumpingWrites = true
+        defer { link.pumpingWrites = false }
         if characteristic.properties.contains(.writeWithoutResponse) {
             let maximum = link.peripheral.maximumWriteValueLength(for: .withoutResponse)
             while link.peripheral.canSendWriteWithoutResponse && !link.outbox.messages.isEmpty {
+                guard isCurrent(token), isCurrent(link), link.ready, characteristic === link.characteristic else { return }
                 guard let fragment = link.outbox.nextFragment(maximumValueBytes: maximum) else { failClient(link, reason: "BLE framing unavailable"); return }
                 link.peripheral.writeValue(fragment.data, for: characteristic, type: .withoutResponse)
-                link.outbox.consume(payloadBytes: fragment.payloadBytes)
+                if link.outbox.consume(payloadBytes: fragment.payloadBytes) { onWorkAvailable?() }
             }
         } else {
             let maximum = link.peripheral.maximumWriteValueLength(for: .withResponse)
@@ -415,9 +422,10 @@ public final class BLEPacketLink: NSObject, PacketLink {
                     notificationCursor = position
                     return
                 }
-                link.outbox.consume(payloadBytes: fragment.payloadBytes)
+                let notify = link.outbox.consume(payloadBytes: fragment.payloadBytes)
                 notificationCursor = (position + 1) % ids.count
                 madeProgress = true
+                if notify { onWorkAvailable?() }
             }
             if !madeProgress { return }
         }
@@ -552,9 +560,12 @@ extension BLEPacketLink: @preconcurrency CBPeripheralDelegate {
             failClient(link, reason: "fragment write failed: \(error!.localizedDescription)")
             return
         }
-        link.outbox.consume(payloadBytes: payloadBytes)
+        let token = generation
+        let notify = link.outbox.consume(payloadBytes: payloadBytes)
         link.inFlightPayloadBytes = nil
         link.writeStarted = nil
+        if notify { onWorkAvailable?() }
+        guard isCurrent(token) else { return }
         pumpWrites(link)
     }
 

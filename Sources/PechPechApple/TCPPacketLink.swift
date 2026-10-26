@@ -12,6 +12,7 @@ public final class TCPPacketLink: PacketLink {
     public var onMessage: ((Data, String) -> Void)?
     public var onLinkReady: ((String) -> Void)?
     public var onDisconnected: ((String) -> Void)?
+    public var onWorkAvailable: (() -> Void)?
 
     private let includePeerToPeer: Bool
     private let serviceType = "_pechpech._tcp"
@@ -24,12 +25,15 @@ public final class TCPPacketLink: PacketLink {
     private var names: [String: String] = [:]
     private var endpoints: [String: NWEndpoint] = [:]
     private var queuedBytes: [String: Int] = [:]
+    private var backpressure: [String: TCPWriteBackpressure] = [:]
     private var readyPeers: Set<String> = []
     private var authenticatedPeers: Set<String> = []
     private var retries: [String: DispatchWorkItem] = [:]
     private var retryAttempts: [String: Int] = [:]
     private var setupTimeouts: [String: DispatchWorkItem] = [:]
     private var frameTimeouts: [String: DispatchWorkItem] = [:]
+    private var listenerRetry: DispatchWorkItem?
+    private var listenerBackoff = TCPListenerBackoff()
     private var generation = UUID()
     private(set) var running = false
 
@@ -62,6 +66,7 @@ public final class TCPPacketLink: PacketLink {
         let frame = LengthPrefixedFrame.encode(data)!
         let pending = queuedBytes[peerID, default: 0]
         guard pending + frame.count <= maximumQueuedBytes else {
+            backpressure[peerID, default: TCPWriteBackpressure()].refused(frameBytes: frame.count)
             onState?("TCP send queue full; caller retains responsibility for retry.")
             return false
         }
@@ -74,8 +79,13 @@ public final class TCPPacketLink: PacketLink {
                 if let error {
                     self.onState?("TCP send failed: \(error.localizedDescription)")
                     self.drop(peerID, connection: connection, retry: true)
+                    return
                 }
                 // A completed socket send is never an application receipt.
+                if self.backpressure[peerID]?.didDrain(queuedBytes: self.queuedBytes[peerID, default: 0],
+                                                       maximumQueuedBytes: self.maximumQueuedBytes) == true {
+                    self.onWorkAvailable?()
+                }
             }
         })
         return true
@@ -109,6 +119,9 @@ public final class TCPPacketLink: PacketLink {
         listener?.newConnectionHandler = nil
         listener?.cancel()
         listener = nil
+        listenerRetry?.cancel()
+        listenerRetry = nil
+        listenerBackoff.reset()
         retries.values.forEach { $0.cancel() }
         retries.removeAll()
         setupTimeouts.values.forEach { $0.cancel() }
@@ -127,6 +140,7 @@ public final class TCPPacketLink: PacketLink {
         readyPeers.removeAll()
         authenticatedPeers.removeAll()
         queuedBytes.removeAll()
+        backpressure.removeAll()
         retryAttempts.removeAll()
         for peerID in disconnected {
             guard generation == token else { return }
@@ -147,6 +161,8 @@ public final class TCPPacketLink: PacketLink {
     }
 
     private func startListener(name: String) {
+        guard running, listener == nil else { return }
+        let token = generation
         do {
             let newListener = try NWListener(using: parameters())
             listener = newListener
@@ -156,9 +172,16 @@ public final class TCPPacketLink: PacketLink {
                     guard let self, self.listener === newListener else { return }
                     switch state {
                     case .ready:
+                        self.listenerBackoff.reset()
                         self.onState?("PechPech TCP relay listening; \(self.modeDescription).")
                     case .failed(let error):
                         self.onState?("TCP listener failed: \(error.localizedDescription)")
+                        guard self.running, self.listener === newListener else { return }
+                        newListener.stateUpdateHandler = nil
+                        newListener.newConnectionHandler = nil
+                        newListener.cancel()
+                        self.listener = nil
+                        self.scheduleListenerRetry(name: name)
                     case .waiting(let error):
                         self.onState?("TCP listener waiting: \(error.localizedDescription)")
                     default: break
@@ -180,7 +203,24 @@ public final class TCPPacketLink: PacketLink {
             newListener.start(queue: .main)
         } catch {
             onState?("Cannot start TCP listener: \(error.localizedDescription)")
+            guard running, generation == token else { return }
+            scheduleListenerRetry(name: name)
         }
+    }
+
+    private func scheduleListenerRetry(name: String) {
+        guard running, listener == nil, listenerRetry == nil else { return }
+        let token = generation
+        let delay = listenerBackoff.nextDelay()
+        let retry = DispatchWorkItem { [weak self] in
+            Task { @MainActor in
+                guard let self, self.running, self.generation == token else { return }
+                self.listenerRetry = nil
+                self.startListener(name: name)
+            }
+        }
+        listenerRetry = retry
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: retry)
     }
 
     private func startBrowser() {
@@ -373,6 +413,7 @@ public final class TCPPacketLink: PacketLink {
         setupTimeouts.removeValue(forKey: peerID)?.cancel()
         frameTimeouts.removeValue(forKey: peerID)?.cancel()
         queuedBytes.removeValue(forKey: peerID)
+        backpressure.removeValue(forKey: peerID)
         connection.stateUpdateHandler = nil
         connection.pathUpdateHandler = nil
         connection.cancel()

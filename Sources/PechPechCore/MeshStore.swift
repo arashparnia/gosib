@@ -167,6 +167,13 @@ public final class MeshStore: @unchecked Sendable {
     public func pending() throws -> [PendingMessage] {
         try database { try Self.rows($0, "SELECT payload FROM pechpech_outbox WHERE receipt IS NULL ORDER BY rowid;", as: PendingMessage.self) }
     }
+    /// Scheduler lookup avoids scanning retained delivered history on each retry.
+    func pending(messageID: UUID) throws -> PendingMessage? {
+        try database { db in
+            guard let bytes = try Self.blobRow(db, "SELECT payload FROM pechpech_outbox WHERE id=? AND receipt IS NULL;", messageID.uuidString) else { return nil }
+            return try WireCoding.decode(PendingMessage.self, from: bytes)
+        }
+    }
     /// The immutable saved snapshot, including an already delivered message.
     public func outgoing(messageID: UUID) throws -> PendingMessage? {
         try database { db in
@@ -261,10 +268,39 @@ public final class MeshStore: @unchecked Sendable {
 
     public func outgoingReceipts(now: Int64 = WireCoding.now) throws -> [RelayPacket] {
         try database { db in
-            let packets = try Self.rows(db, "SELECT packet FROM pechpech_returns ORDER BY rowid;", as: RelayPacket.self)
-            // An expired return is regenerated when the original sender retries; never
-            // delete its immutable result just because the transport packet expired.
-            return packets.filter { $0.expiresAt > now }
+            var packets: [RelayPacket] = []
+            var expired: [(id: String, bytes: Data)] = []
+            do {
+                let query = try Self.statement(db, "SELECT id,packet FROM pechpech_returns ORDER BY rowid;")
+                defer { sqlite3_finalize(query) }
+                scan: while true {
+                    switch sqlite3_step(query) {
+                    case SQLITE_DONE: break scan
+                    case SQLITE_ROW:
+                        guard let id = sqlite3_column_text(query, 0) else { throw Self.error(db) }
+                        let bytes = Self.blob(query, 1)
+                        let packet = try WireCoding.decode(RelayPacket.self, from: bytes)
+                        if packet.expiresAt > now { packets.append(packet) }
+                        else { expired.append((String(cString: id), bytes)) }
+                    default: throw Self.error(db)
+                    }
+                }
+            }
+            if !expired.isEmpty {
+                try Self.transaction(db) {
+                    let erase = try Self.statement(db, "DELETE FROM pechpech_returns WHERE id=? AND packet=?;")
+                    defer { sqlite3_finalize(erase) }
+                    for record in expired {
+                        guard sqlite3_reset(erase) == SQLITE_OK,
+                              sqlite3_clear_bindings(erase) == SQLITE_OK else { throw Self.error(db) }
+                        try Self.bind(record.id, erase, 1, db); try Self.bind(record.bytes, erase, 2, db)
+                        try Self.done(erase, db)
+                    }
+                }
+            }
+            // Only expired transport copies are removed. Immutable inbox results
+            // retain the receipt and regenerate its return packet on sender replay.
+            return packets
         }
     }
     public func retireReturn(messageID: UUID, bodyHash: Data, senderID: String) throws {

@@ -30,3 +30,29 @@ enum TCPConnectionCandidates {
         return Array(known.subtracting(connected).subtracting(retrying).sorted().prefix(available))
     }
 }
+
+/// Notify once when enough capacity returns for a previously refused complete frame.
+struct TCPWriteBackpressure {
+    private var smallestRefusedFrame: Int?
+
+    mutating func refused(frameBytes: Int) {
+        smallestRefusedFrame = min(smallestRefusedFrame ?? frameBytes, frameBytes)
+    }
+
+    mutating func didDrain(queuedBytes: Int, maximumQueuedBytes: Int) -> Bool {
+        guard let frameBytes = smallestRefusedFrame,
+              queuedBytes <= maximumQueuedBytes - frameBytes else { return false }
+        smallestRefusedFrame = nil
+        return true
+    }
+}
+
+/// Failed listeners are replaced with one bounded-backoff attempt at a time.
+struct TCPListenerBackoff {
+    private var attempt = 0
+    mutating func nextDelay() -> TimeInterval {
+        attempt = min(attempt + 1, 6)
+        return Double(min(1 << (attempt - 1), 30))
+    }
+    mutating func reset() { attempt = 0 }
+}

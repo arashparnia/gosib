@@ -16,9 +16,12 @@ public enum NodeEvent: Equatable, Sendable {
     public var onDelivery: ((Message, DeliveryReceipt) -> Void)?
     public var onPeers: (([PublicIdentity]) -> Void)?
     public var onEvent: ((NodeEvent) -> Void)?
+    public private(set) var retryScheduling: RetryScheduling = .periodic
     private let authorize: (Message, PublicIdentity) -> Bool
     private let links: [any PacketLink]
     private var timer: Task<Void, Never>?
+    private var workTask: Task<Void, Never>?
+    private var writableLinks = Set<Int>()
     private var running = false
     private var stopping = false
     private var restartRequested = false
@@ -56,9 +59,10 @@ public enum NodeEvent: Equatable, Sendable {
                 guard let self else { return }
                 if self.peers.removeValue(forKey: Slot(link: index, id: id)) != nil { self.publishPeers() }
             }
+            link.onWorkAvailable = { [weak self] in self?.requestWork(link: index) }
         }
     }
-    deinit { timer?.cancel() }
+    deinit { timer?.cancel(); workTask?.cancel() }
 
     /// Starts links and foreign relay forwarding. Restored outbox messages remain paused.
     public func start() {
@@ -73,14 +77,29 @@ public enum NodeEvent: Equatable, Sendable {
             link.start(nodeName: identity.publicIdentity.id)
         }
         guard isCurrent(epoch) else { return }
+        startRetryTimer()
+        flush()
+    }
+    /// Event-driven scheduling retains the current links and explicit origin
+    /// intent. Hosts still configure OS background modes and execution policy.
+    public func setRetryScheduling(_ scheduling: RetryScheduling) {
+        guard retryScheduling != scheduling else { return }
+        retryScheduling = scheduling
+        timer?.cancel(); timer = nil
+        guard running, scheduling == .periodic else { return }
+        startRetryTimer()
+        tick()
+    }
+    private func startRetryTimer() {
+        guard running, retryScheduling == .periodic else { return }
+        let epoch = generation
         timer = Task { [weak self] in
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(1)) } catch { return }
-                guard let self, self.isCurrent(epoch) else { return }
+                guard let self, self.isCurrent(epoch), self.retryScheduling == .periodic else { return }
                 self.tick()
             }
         }
-        flush()
     }
     /// Already transmitted packets cannot be recalled. Original immutable records remain saved.
     public func stop() {
@@ -92,6 +111,7 @@ public enum NodeEvent: Equatable, Sendable {
             return
         }
         running = false; generation &+= 1; timer?.cancel(); timer = nil
+        workTask?.cancel(); workTask = nil; writableLinks.removeAll()
         stopping = true
         defer {
             stopping = false
@@ -133,7 +153,7 @@ public enum NodeEvent: Equatable, Sendable {
     }
     /// Explicitly resume an original saved message after stop/restart or UI interruption.
     public func resume(_ messageID: UUID) throws {
-        guard try store.pending().contains(where: { $0.message.id == messageID }) else { return }
+        guard try store.pending(messageID: messageID) != nil else { return }
         active.insert(messageID); flush()
     }
     public func pause(_ messageID: UUID) {
@@ -163,6 +183,28 @@ public enum NodeEvent: Equatable, Sendable {
     }
 
     private func isCurrent(_ epoch: UInt64) -> Bool { running && generation == epoch }
+    private func requestWork(link: Int) {
+        guard running else { return }
+        writableLinks.insert(link)
+        guard workTask == nil else { return }
+        let epoch = generation
+        workTask = Task { [weak self] in
+            await Task.yield()
+            guard let self, self.isCurrent(epoch), !Task.isCancelled else { return }
+            self.workTask = nil
+            let writable = self.writableLinks
+            self.writableLinks.removeAll()
+            for slot in Array(self.peers.keys) where writable.contains(slot.link) {
+                guard self.isCurrent(epoch) else { return }
+                guard let peer = self.peers[slot] else { continue }
+                if !peer.ready || peer.echoed != peer.remoteChallenge { self.sendHello(to: slot) }
+            }
+            guard self.isCurrent(epoch) else { return }
+            // Keep successful send suppression: a capacity event retries refused
+            // work without turning every queue completion into an origin retry.
+            self.flush()
+        }
+    }
     private func peer(for slot: Slot) -> Peer? {
         if let existing = peers[slot] { return existing }
         guard peers.keys.filter({ $0.link == slot.link }).count < 4 else { return nil }
@@ -257,7 +299,7 @@ public enum NodeEvent: Equatable, Sendable {
             if previous == nil, let saved = try store.received(messageID: message.id) { onMessage?(saved) }
         case .receipt(let receipt):
             let previous = try store.receipt(messageID: receipt.messageID)
-            let message = try store.pending().first { $0.message.id == receipt.messageID }?.message
+            let message = try store.pending(messageID: receipt.messageID)?.message
             try store.saveReceipt(receipt, authenticatedReceiver: opened.sender)
             active.remove(receipt.messageID); origins.removeValue(forKey: receipt.messageID)
             // Independent endpoint ACK stops durable receiver receipt retries.
@@ -295,8 +337,13 @@ public enum NodeEvent: Equatable, Sendable {
                     guard isCurrent(epoch) else { return }
                     forward(packet)
                 }
-                for pending in try store.pending() where active.contains(pending.message.id) {
+                for messageID in active.sorted(by: { $0.uuidString < $1.uuidString }) {
                     guard isCurrent(epoch) else { return }
+                    guard active.contains(messageID) else { continue }
+                    guard let pending = try store.pending(messageID: messageID) else {
+                        active.remove(messageID); origins.removeValue(forKey: messageID)
+                        continue
+                    }
                     let message = pending.message
                     if origins[message.id]?.expiresAt ?? 0 <= WireCoding.now + 5_000 {
                         origins[message.id] = try EndpointCrypto.seal(.message(message), from: identity,

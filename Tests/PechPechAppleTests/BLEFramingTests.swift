@@ -37,8 +37,22 @@ final class BLEFramingTests: XCTestCase {
         try Self.runOriginalBoundarySuite()
     }
 
+    func testBackpressuredOutboxSignalsWorkOnlyAfterACompleteMessageDrains() {
+        var outbox = BLEOutbox()
+        outbox.enqueue(Data(repeating: 1, count: 20), id: 1, priority: 1)
+        outbox.enqueue(Data([2]), id: 2, priority: 1)
+        outbox.waitingForCapacity = true
+        XCTAssertFalse(outbox.consume(payloadBytes: 8), "A partial stream still occupies the same queue slot and bytes.")
+        XCTAssertTrue(outbox.consume(payloadBytes: 12))
+        XCTAssertEqual(outbox.byteCount, 1)
+        XCTAssertFalse(outbox.consume(payloadBytes: 1), "A completed message must not keep announcing the same relieved pressure.")
+        outbox.enqueue(Data([3]), id: 3, priority: 1)
+        outbox.waitingForCapacity = true
+        XCTAssertTrue(outbox.consume(payloadBytes: 1), "A later refused send can arm another retry opportunity.")
+    }
+
     #if canImport(CoreBluetooth)
-    @MainActor func testStopFromStartupStatePreventsRadioManagerCreation() {
+    @MainActor func testStopFromStartupStatePreventsRadioManagerCreation() async {
         let link = BLEPacketLink()
         defer { link.onState = nil; link.stop() }
         var states = 0
@@ -49,7 +63,7 @@ final class BLEFramingTests: XCTestCase {
         XCTAssertFalse(link.hasRadioManagers, "A stop from the startup callback must precede any native manager creation.")
     }
 
-    @MainActor func testStopFromInitialPeerNotificationCancelsBLEStartWithoutRecursion() {
+    @MainActor func testStopFromInitialPeerNotificationCancelsBLEStartWithoutRecursion() async {
         let link = BLEPacketLink()
         defer { link.onPeers = nil; link.stop() }
         var notifications = 0
@@ -62,7 +76,7 @@ final class BLEFramingTests: XCTestCase {
         XCTAssertEqual(notifications, 1)
     }
 
-    @MainActor func testNestedStartupCannotCreateManagersAfterReplacementSessionStops() {
+    @MainActor func testNestedStartupCannotCreateManagersAfterReplacementSessionStops() async {
         let link = BLEPacketLink()
         defer { link.onState = nil; link.stop() }
         var states = 0

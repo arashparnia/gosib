@@ -1,0 +1,40 @@
+# Production readiness work
+
+The requested target includes background delivery. Release classification, source compatibility, software tests and physical operating behavior are separate facts. A stable release label cannot establish behavior that was not implemented or measured.
+
+## Implemented in the working branch
+
+- Explicit periodic/event-driven retry scheduling, retaining links and caller intent while polling is disabled.
+- Coalesced native queue-capacity signals and event-driven retries of refused work.
+- Bounded, retained opaque queue-admission proof across asynchronous storage reads.
+- Indexed active-message lookups and transactional pruning of expired transport return copies without deleting inbox results.
+- Failed TCP listener recovery with bounded backoff.
+- Portable Linux tests using development-only Swift Crypto/SQLite shims, seeded loss/duplication/reordering, process-kill recovery and real scoped ENOSPC/SQLITE_FULL failures.
+
+The shipping package continues using Apple's CryptoKit and system frameworks. Linux qualification copies the unmodified SDK/test sources to `.build/linux-qualification/package` and supplies module shims there; it does not establish Linux radio support or native Apple-framework compatibility.
+
+The [26 October Linux record](verification-linux-2026-10-26.md) reports 95 passing tests in both debug and optimized builds, four process-kill cases and three actual disk-full cases in each build, the seeded fault schedule, vectors, demo and resources. Native Apple validation remains separate.
+
+## Reproduce software qualification on Linux
+
+Install Swift 5.10 or later, SQLite headers, a C compiler, Python 3 and Node 22 or later. Use a reviewed Swift toolchain and verify its upstream signature. Then run:
+
+```sh
+python3 scripts/check-linux-core.py --configuration debug
+python3 scripts/check-linux-core.py --configuration release
+node scripts/check-interop-vector.cjs
+```
+
+`--swift /absolute/path/to/swift` selects an isolated toolchain. Tests use synthetic identities and temporary stores. The qualification driver prints exact development dependency revisions. Its crash probe kills separate processes after committed outbox, sender receipt and inbox/return writes and before an inbox transaction commits. Its scoped write interceptor forces actual SQLite disk-full errors for queue, inbox and receipt commits, checks rollback, retries and reopens the results.
+
+## Background delivery boundaries
+
+Event-driven scheduling can process work during execution opportunities the OS provides. It is implemented and tested with injected link events; it does not create OS execution time. iOS hosts own background-mode declarations, permissions and lifecycle integration. The current Apple adapter does not restore Core Bluetooth managers after process termination. A restored old radio connection would also need safe neighbor-session reconciliation before a fresh process could authenticate it.
+
+Continuous TCP execution, delivery after force-quit and uninterrupted arbitrary-hop background routes are not established capabilities. Supported background states and recovery behavior need an explicit host contract and native implementation/verification before claiming those behaviors.
+
+## Remaining release evidence
+
+The Linux-only work does not compile or execute CoreBluetooth, Network or Keychain code. Native Apple compilation is an independent check; real-device coverage is listed in [qualification](qualification.md). No independent security audit was performed. Key protection, at-rest file protection, host business transactions and an explicit history-retention policy remain host responsibilities.
+
+Production release notes must state the actual supported operating conditions, exact-commit verification and known limits. Historical tags and verification records stay immutable. Do not convert the Linux test results into physical radio, background, latency or universal correctness claims.

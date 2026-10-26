@@ -34,6 +34,18 @@ final class StoreTests: XCTestCase {
         defer { sqlite3_close(db) }
         guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else { throw PechPechError.storage("Cannot apply synthetic failure trigger.") }
     }
+    private func scalarInt(_ sql: String, at url: URL) throws -> Int {
+        var db: OpaquePointer?
+        guard sqlite3_open(url.path, &db) == SQLITE_OK, let db else { throw PechPechError.storage("Cannot open synthetic fixture.") }
+        defer { sqlite3_close(db) }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
+            throw PechPechError.storage("Cannot inspect synthetic fixture.")
+        }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW else { throw PechPechError.storage("Cannot read synthetic fixture.") }
+        return Int(sqlite3_column_int64(statement, 0))
+    }
     private func packet(_ sender: Identity, _ receiver: Identity, id: UUID = UUID(), priority: PacketPriority = .normal,
                         now: Int64, lifetime: Int64 = 600_000, encryptedBytes: Int = 28) -> RelayPacket {
         // An opaque relay stores ciphertext without decrypting it; these synthetic bytes
@@ -200,6 +212,55 @@ final class StoreTests: XCTestCase {
                                   channel: original.channel, payload: Data("changed".utf8), createdAt: original.createdAt)
         XCTAssertThrowsError(try accept(changed, from: sender, at: receiver, store: restarted))
         XCTAssertEqual(try restarted.inbox().count, 1)
+    }
+
+    func testIndexedPendingLookupExcludesDeliveredHistoryAndSurvivesRestart() throws {
+        let sender = Identity(), receiver = Identity(), path = url()
+        let outbox = try store(sender, at: path), inbox = try store(receiver)
+        let delivered = try message(sender, receiver), pending = try message(sender, receiver)
+        try outbox.queue(delivered, recipient: receiver.publicIdentity)
+        try outbox.queue(pending, recipient: receiver.publicIdentity, priority: .bulk)
+        let receipt = try accept(delivered, from: sender, at: receiver, store: inbox)
+        try outbox.saveReceipt(receipt, authenticatedReceiver: receiver.publicIdentity)
+        let reopened = try store(sender, at: path)
+        XCTAssertNil(try reopened.pending(messageID: UUID()))
+        XCTAssertNil(try reopened.pending(messageID: delivered.id))
+        XCTAssertEqual(try reopened.outgoing(messageID: delivered.id)?.message, delivered)
+        XCTAssertEqual(try reopened.pending(messageID: pending.id),
+                       PendingMessage(message: pending, recipient: receiver.publicIdentity, priority: .bulk))
+    }
+
+    func testExpiredReturnPruningPreservesDurableResultAndReplayRecoveryAcrossRestart() throws {
+        let sender = Identity(), receiver = Identity(), path = url()
+        let inbox = try store(receiver, at: path), original = try message(sender, receiver)
+        let receipt = try accept(original, from: sender, at: receiver, store: inbox)
+        let firstPacket = try XCTUnwrap(inbox.outgoingReceipts().first)
+        XCTAssertTrue(try inbox.outgoingReceipts(now: firstPacket.expiresAt).isEmpty)
+        XCTAssertEqual(try scalarInt("SELECT COUNT(*) FROM pechpech_returns;", at: path), 0)
+        let reopened = try store(receiver, at: path)
+        XCTAssertTrue(try reopened.outgoingReceipts().isEmpty)
+        XCTAssertEqual(try reopened.received(messageID: original.id)?.message, original)
+        XCTAssertEqual(try reopened.received(messageID: original.id)?.receipt, receipt)
+        XCTAssertEqual(try accept(original, from: sender, at: receiver, store: reopened), receipt)
+        let regenerated = try XCTUnwrap(reopened.outgoingReceipts().first)
+        XCTAssertNotEqual(regenerated.id, firstPacket.id)
+        XCTAssertEqual(try EndpointCrypto.open(regenerated, for: sender).envelope, .receipt(receipt))
+        XCTAssertEqual(try reopened.inbox().count, 1)
+    }
+
+    func testFailedExpiredReturnPruningRollsBackEveryTransportCopy() throws {
+        let sender = Identity(), receiver = Identity(), path = url(), inbox = try store(receiver, at: path)
+        let first = try message(sender, receiver), second = try message(sender, receiver)
+        let firstReceipt = try accept(first, from: sender, at: receiver, store: inbox)
+        let secondReceipt = try accept(second, from: sender, at: receiver, store: inbox)
+        let packets = try inbox.outgoingReceipts()
+        try execute("CREATE TRIGGER fail_return_prune BEFORE DELETE ON pechpech_returns WHEN OLD.id='\(second.id.uuidString)' BEGIN SELECT RAISE(ABORT,'synthetic prune failure'); END;", at: path)
+        XCTAssertThrowsError(try inbox.outgoingReceipts(now: try XCTUnwrap(packets.map(\.expiresAt).max())))
+        try execute("DROP TRIGGER fail_return_prune;", at: path)
+        XCTAssertEqual(try inbox.outgoingReceipts(), packets)
+        XCTAssertEqual(try inbox.received(messageID: first.id)?.receipt, firstReceipt)
+        XCTAssertEqual(try inbox.received(messageID: second.id)?.receipt, secondReceipt)
+        XCTAssertEqual(try store(receiver, at: path).inbox().count, 2)
     }
 
     func testReceiptCreationOrStorageFailureRollsBackInboxAndReturn() throws {

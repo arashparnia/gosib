@@ -33,6 +33,8 @@ Persist an immutable owned command through the host's original outbox before `aw
 
 `start()` begins foreground links and a one-second retry/hello pass for packets supplied by `loadPending`. A received foreign packet spends one hop before durable admission. Retrying that saved copy does not spend another hop. Higher priority and earlier expiry are scheduled first; direct destinations and advertised shorter routes are preferred, with other authenticated opportunities still available.
 
+Unreleased scheduling also supports `setRetryScheduling(.eventDriven)`: links remain active while periodic polling stops. Transport work-available events and explicit host ticks service eligible durable work without reviving ephemeral origin attempts. Returning to `.periodic` schedules an immediate retry. The host still owns OS background capabilities and which durable originals may be loaded; the scheduling choice does not grant wake time.
+
 An authenticated next-hop acknowledgment can retire a foreign relay copy only after that peer's host hook succeeds. For a foreign relay, the hook must durably store the exact packet. For an endpoint, it confirms successful phase-specific handling in the current session; a preparation or grant phase may remain intentionally volatile. It says nothing about final kitchen acceptance or other business completion. Only the host's independently authenticated receipt for a durable business result can resolve that action. Lost acknowledgments or callbacks remain compatible with idempotent host retries.
 
 `stop()` closes links and gates late async continuations from sending on an obsolete session. An already-running durable host write or endpoint action cannot be recalled. Keep host processing transactional and idempotent, and do not accept unattended old actions merely because networking later returns.
@@ -44,6 +46,8 @@ Callbacks expose authenticated neighbor identities, signed route hints and link/
 ## Bounds and security limits
 
 The router allows four distinct authenticated neighbor identities and four transport handles per adapter. Advertised routes are capped at 32 entries with distance 0–7. Inbound handling uses a 64-frame burst with 32 frames/second replenishment per handle, at most 64 concurrent packet IDs, at most 64 concurrent acknowledgment-retirement IDs, and bounded sent/source caches. A retry pass considers at most 1,024 host-loaded packets. The host must bound its durable spool and the work required to load it; a processing cap is not a database-capacity policy.
+
+The unreleased router retains at most 1,024 outstanding queue-admission proofs per neighbor across retry passes and suspended host reads. An acknowledgment must match an actually admitted immutable hash before host relay retirement begins. Failed admission does not establish proof, changed hashes cannot replace retained IDs, and successful retirement or expiry frees capacity. A full proof set reports backpressure instead of overwriting older authentication evidence.
 
 These limits constrain ordinary resource use. They do not prove denial-of-service resistance, prevent Sybil peers, establish physical distance or guarantee a route/latency. Synchronous codec work and callback ordering remain on the main actor; asynchronous persistence must preserve the host's transaction order.
 

@@ -47,8 +47,28 @@ final class TCPFramingTests: XCTestCase {
         XCTAssertEqual(TCPConnectionCandidates.select(known: known, connected: connected, retrying: []), ["peer-a"])
     }
 
+    func testTCPWorkSignalWaitsForARefusedFrameToFitAndFiresOnce() {
+        var pressure = TCPWriteBackpressure()
+        XCTAssertFalse(pressure.didDrain(queuedBytes: 0, maximumQueuedBytes: 100))
+        pressure.refused(frameBytes: 40)
+        XCTAssertFalse(pressure.didDrain(queuedBytes: 70, maximumQueuedBytes: 100))
+        XCTAssertTrue(pressure.didDrain(queuedBytes: 60, maximumQueuedBytes: 100))
+        XCTAssertFalse(pressure.didDrain(queuedBytes: 0, maximumQueuedBytes: 100))
+        pressure.refused(frameBytes: 40)
+        pressure.refused(frameBytes: 20)
+        XCTAssertTrue(pressure.didDrain(queuedBytes: 80, maximumQueuedBytes: 100),
+                      "Capacity for the smaller refused frame is a useful retry opportunity.")
+    }
+
+    func testListenerRecoveryBackoffIsBoundedAndResetsAfterReadiness() {
+        var backoff = TCPListenerBackoff()
+        XCTAssertEqual((0..<9).map { _ in backoff.nextDelay() }, [1, 2, 4, 8, 16, 30, 30, 30, 30])
+        backoff.reset()
+        XCTAssertEqual(backoff.nextDelay(), 1)
+    }
+
     #if canImport(Network)
-    @MainActor func testStopFromInitialPeerNotificationCancelsStartBeforeNativeLinks() {
+    @MainActor func testStopFromInitialPeerNotificationCancelsStartBeforeNativeLinks() async {
         let link = TCPPacketLink()
         defer { link.onPeers = nil; link.stop() }
         var notifications = 0

@@ -100,6 +100,8 @@ A `stored` acknowledgment follows durable relay admission or endpoint persistenc
 
 While running, one-second ticks retry outstanding work and send signed hello/echo frames even on locally ready links. This lets the other side recover a lost final echo without replacing the link's challenges. Failed local queue admission does not advance the node's echoed-challenge marker. Unchanged owned packets reuse their current packet identity/ciphertext; a fresh packet is sealed near expiry. The `transmitting` event means attempts can use a local neighbor, not that a usable end-to-end route or receipt exists. `waitingForRoute` means no authenticated neighbor is currently available.
 
+The unreleased `RetryScheduling.eventDriven` option disables periodic ticks while retaining the running session. Refused queue admissions can be retried through `PacketLink.onWorkAvailable` and explicit host ticks. A work event retries hello/echo frames and eligible unsent work without clearing successful per-pass send suppression. Scheduling policy does not enable OS background modes or establish execution while suspended.
+
 Custom adapters are also limited to four tracked transport handles per adapter, including incomplete handshakes. A disconnect releases its handle. Synchronous host and adapter callbacks may pause or stop a session; forwarding checks that intent before every new send. A restart requested during stop waits for all adapters to close, and a later stop cancels that request. Work from an earlier session cannot send through a replacement session.
 
 ## Receipt boundaries
@@ -109,6 +111,8 @@ The intended recipient authorizes and stores message bytes before creating an en
 The sender validates the authenticated recipient identity, original message and body hash, then durably saves the receipt. Only this boundary can resolve framework delivery. An authenticated `receiptStored` from the original sender retires the recipient's active return packet; durable inbox and result records remain available for replay recovery.
 
 Owned outbox/inbox records are retained independently of relay expiry and capacity. Successfully delivered outgoing messages leave the pending query, but their immutable snapshots and receipts remain. There is no automatic deduplication-history compaction in the current generic store. When an outgoing receipt packet expires, retrying the original immutable message can regenerate it from the durable inbox result.
+
+The unreleased store prunes expired active return-packet copies transactionally. Its immutable inbox/result receipt remains available, and replay regenerates a new encrypted return packet containing the same durable receipt. Failed pruning rolls back the complete deletion set.
 
 Link queue admission, completed BLE/TCP writes and next-hop storage acknowledgments are earlier boundaries. None proves durable endpoint storage. A lost receipt leaves delivery uncertain; a timeout cannot prove the recipient never received it. Receipts may return through a different relay chain.
 

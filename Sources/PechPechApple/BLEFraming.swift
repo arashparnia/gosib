@@ -39,6 +39,7 @@ struct BLEOutboundMessage {
 struct BLEOutbox {
     var messages: [BLEOutboundMessage] = []
     var byteCount = 0
+    var waitingForCapacity = false
 
     mutating func enqueue(_ data: Data, id: UInt32, priority: Int, protectCurrent: Bool = false) {
         // Data slices may keep a nonzero startIndex. Frames use byte offsets
@@ -56,12 +57,17 @@ struct BLEOutbox {
         return BLEFragment.encode(message, maximumValueBytes: maximumValueBytes)
     }
 
-    mutating func consume(payloadBytes: Int) {
-        guard !messages.isEmpty else { return }
+    /// Returns a single retry signal when a completed stream relieves queue pressure.
+    @discardableResult mutating func consume(payloadBytes: Int) -> Bool {
+        guard !messages.isEmpty else { return false }
         messages[0].offset += payloadBytes
         if messages[0].offset == messages[0].data.count {
             byteCount -= messages.removeFirst().data.count
+            let notify = waitingForCapacity
+            waitingForCapacity = false
+            return notify
         }
+        return false
     }
 }
 

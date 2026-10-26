@@ -96,6 +96,7 @@ Retries use the saved immutable record: `try node.resume(message.id)`. `node.pau
 - [Integration](docs/integration.md): identity storage, enrollment, lifecycle, permissions, and custom transports.
 - [Packaging and privacy](docs/packaging.md): SwiftPM products, bundled notices/manifests, and independent consumer checks.
 - [Qualification](docs/qualification.md): software evidence and the physical-device matrix still required.
+- [Production readiness work](docs/production-readiness.md): unreleased event-driven scheduling, Linux failure qualification, and background-delivery boundaries.
 - [Current verification record](docs/verification-0.3.1-2026-10-26.md): checks completed for this release and their limits.
 - [0.2 verification record](docs/verification-2026-10-04.md): retained evidence for the prior release.
 - [Upgrade guide](docs/migration-0.2.md): module, wire, storage, and version boundaries.

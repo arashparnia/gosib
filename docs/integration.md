@@ -58,6 +58,8 @@ Both conform to the `@MainActor` `PacketLink` interface. Keep adapters and the n
 
 Each adapter is capped at four neighbors. BLE peer queues hold at most 32 messages / 128 KiB. TCP peer queues hold at most 256 KiB including framing. BLE selects higher priorities between complete message streams; TCP retains socket ordering rather than preempting already queued bytes. Applications should keep bulk traffic paced and avoid flooding transport queues.
 
+The unreleased `PacketLink.onWorkAvailable` callback reports that previously refused local admission may fit again. Nodes coalesce that event and retry eligible work without treating queue drain as delivery. Existing custom adapters can keep using host retry scheduling through the default no-op callback implementation.
+
 The node additionally caps ready neighbors at four distinct endpoint identities across its links. Its `waitingForRoute` event means there are no authenticated neighbors; `transmitting` means there is a local forwarding opportunity. Neither event proves final-recipient reachability. Use authenticated delivery receipts for completion and application-specific uncertainty feedback while waiting.
 
 The initial node schedules synchronous storage and cryptographic work on the main actor. Keep callbacks brief and qualify responsiveness under your workload, especially with saturated spools or large history. No UI frame-time or latency guarantee is established by the package's injected-link tests. Moving scheduling work off the UI actor while preserving storage and callback ordering is a future improvement.
@@ -88,6 +90,12 @@ This package does not create an App Clip, request background modes, provision si
 Start the nearby session while the host is foreground and stop it when the intended session ends. Stop new attempts when user intent or host lifecycle requires it. Durable outgoing state remains recoverable independently of transient transport queues.
 
 A foreground receiver is the initial scope. Suspension, locking, force-quit or an out-of-range intermediary may break a path. New Apple background facilities are separate deployment work; adding a background entitlement does not prove continuous receiving. See [qualification](qualification.md).
+
+### Event-driven background integration (unreleased)
+
+`MeshNode` and `OpaquePacketRouter` add `setRetryScheduling(.eventDriven)` to stop polling while retaining current links and caller-authorized work. Change back to `.periodic` when the host wants periodic retries; that also requests an immediate retry pass. Explicit `tick()` remains available. Changing scheduling is distinct from `stop()`, which closes links and cancels current outgoing intent. A reconstructed generic node still requires explicit resumption of original outgoing messages.
+
+A host that uses iOS Bluetooth background events must declare the applicable `UIBackgroundModes` values, `bluetooth-central` and `bluetooth-peripheral`, and retain/recreate its node according to its own lifecycle policy. The OS controls wake opportunities and changes discovery/advertising behavior in the background. This package does not yet implement Core Bluetooth state restoration after process termination, and TCP is not a continuous background transport. Those deployment limits remain explicit; event-driven scheduling alone cannot promise delivery while suspended, terminated or force-quit. See [Apple's background guidance](https://developer.apple.com/library/archive/documentation/NetworkingInternetWeb/Conceptual/CoreBluetooth_concepts/CoreBluetoothBackgroundProcessingForIOSApps/PerformingTasksWhileYourAppIsInTheBackground.html) and [production readiness](production-readiness.md).
 
 ## Adding another transport or platform
 

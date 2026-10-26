@@ -109,6 +109,7 @@ public struct SignedOpaqueAck: Codable, Equatable, Sendable {
     public var onEvent: ((NodeEvent) -> Void)?
     public let identity: Identity
     public let profile: String
+    public private(set) var retryScheduling: RetryScheduling = .periodic
     private let links: [any PacketLink]
     private let decode: (Data) throws -> OpaquePacket
     private let forwarded: (OpaquePacket) throws -> OpaquePacket
@@ -126,8 +127,11 @@ public struct SignedOpaqueAck: Codable, Equatable, Sendable {
     private var removing = Set<UUID>()
     private var flushingGeneration: UInt64?
     private var flushAgain = false
+    private var workGeneration: UInt64?
+    private var workAdapters = Set<Int>()
     private static let maximumPendingPerPass = 1_024
     private struct Slot: Hashable { let link: Int; let id: String }
+    private struct QueuedPacket { let hash: Data; let expiresAt: Int64 }
     private final class Peer {
         let challenge = UUID()
         var remoteChallenge: UUID?
@@ -137,6 +141,7 @@ public struct SignedOpaqueAck: Codable, Equatable, Sendable {
         var lastHello = ContinuousClock.now
         var routes: [String: Int] = [:]
         var sent: [UUID: Data] = [:]
+        var queued: [UUID: QueuedPacket] = [:]
         var sourcePackets = Set<UUID>()
         var tokens: Double = 64
         var tokenAt = ContinuousClock.now
@@ -164,6 +169,7 @@ public struct SignedOpaqueAck: Codable, Equatable, Sendable {
                 guard let self else { return }
                 self.peers.removeValue(forKey: Slot(link: index, id: id)); self.publishTopology()
             }
+            link.onWorkAvailable = { [weak self] in self?.workAvailable(on: index) }
         }
     }
     deinit { timer?.cancel() }
@@ -198,16 +204,35 @@ public struct SignedOpaqueAck: Codable, Equatable, Sendable {
             link.start(nodeName: identity.publicIdentity.id)
         }
         guard isCurrent(epoch) else { return }
-        timer = Task { [weak self] in
-            while !Task.isCancelled {
-                do { try await Task.sleep(for: .seconds(1)) } catch { return }
-                guard let self, self.isCurrent(epoch) else { return }
-                await self.tick()
-            }
-        }
+        startRetryTimer()
         Task { [weak self] in
             guard let self, self.isCurrent(epoch) else { return }
             await self.flush()
+        }
+    }
+    /// Event-driven scheduling keeps native links and host-selected pending work
+    /// available without a periodic task. It grants no OS execution privileges.
+    public func setRetryScheduling(_ scheduling: RetryScheduling) {
+        guard retryScheduling != scheduling else { return }
+        retryScheduling = scheduling
+        timer?.cancel(); timer = nil
+        guard running, scheduling == .periodic else { return }
+        startRetryTimer()
+        let epoch = generation
+        Task { [weak self] in
+            guard let self, self.isCurrent(epoch), self.retryScheduling == .periodic else { return }
+            await self.tick()
+        }
+    }
+    private func startRetryTimer() {
+        guard running, retryScheduling == .periodic else { return }
+        let epoch = generation
+        timer = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                guard let self, self.isCurrent(epoch), self.retryScheduling == .periodic else { return }
+                await self.tick()
+            }
         }
     }
     /// Stops new sends. Host operations already awaiting durable completion cannot be recalled.
@@ -221,6 +246,7 @@ public struct SignedOpaqueAck: Codable, Equatable, Sendable {
             if restartRequested { restartRequested = false; start() }
         }
         peers.removeAll(); incoming.removeAll(); removing.removeAll()
+        workGeneration = nil; workAdapters.removeAll()
         // Finish tearing down every adapter before honoring a callback's restart.
         for link in links { link.stop() }
         publishTopology()
@@ -249,10 +275,12 @@ public struct SignedOpaqueAck: Codable, Equatable, Sendable {
     public func tick() async {
         guard running else { return }
         let epoch = generation
+        let now = WireCoding.now
         for (slot, peer) in peers {
             guard isCurrent(epoch) else { return }
             guard peers[slot] === peer else { continue }
             peer.sent.removeAll(); peer.sourcePackets.removeAll()
+            peer.queued = peer.queued.filter { $0.value.expiresAt > now }
             if peer.ready && peer.lastHello.duration(to: .now) > .seconds(15) { peer.ready = false }
             sendHello(to: slot)
         }
@@ -288,6 +316,33 @@ public struct SignedOpaqueAck: Codable, Equatable, Sendable {
     }
 
     private func isCurrent(_ epoch: UInt64) -> Bool { running && epoch == generation }
+    private func workAvailable(on index: Int) {
+        guard running else { return }
+        let epoch = generation
+        workAdapters.insert(index)
+        guard workGeneration != epoch else { return }
+        workGeneration = epoch
+        Task { [weak self] in
+            guard let self, self.isCurrent(epoch) else { return }
+            // Coalesce synchronous capacity notifications. Retry a refused
+            // handshake without spending a newly free slot on redundant hellos.
+            var handled = Set<Int>()
+            while let index = self.workAdapters.first {
+                self.workAdapters.remove(index)
+                guard self.isCurrent(epoch) else { return }
+                guard handled.insert(index).inserted else { continue }
+                for (slot, peer) in self.peers where slot.link == index {
+                    guard self.isCurrent(epoch) else { return }
+                    guard self.peers[slot] === peer else { continue }
+                    if !peer.ready || peer.echoed != peer.remoteChallenge { self.sendHello(to: slot) }
+                }
+            }
+            guard self.isCurrent(epoch) else { return }
+            self.workGeneration = nil
+            // Preserve admitted-packet suppression; only refused frames retry.
+            await self.flush()
+        }
+    }
     private func linkReady(_ slot: Slot) {
         guard running, peer(for: slot) != nil else { return }
         sendHello(to: slot)
@@ -345,14 +400,24 @@ public struct SignedOpaqueAck: Codable, Equatable, Sendable {
             guard peer.ready, let neighbor = peer.remoteIdentity else { throw PechPechError.authenticationFailed }
             if let ack = try? WireCoding.decode(SignedOpaqueAck.self, from: bytes) {
                 try ack.validate(sender: neighbor, challenge: peer.challenge, profile: profile)
-                guard peer.sent[ack.claims.packetID] == ack.claims.immutableHash else { throw PechPechError.authenticationFailed }
+                // Keep admission evidence across retry passes and suspended host reads.
+                // The current send is tentative until the synchronous adapter returns.
+                guard peer.queued[ack.claims.packetID]?.hash == ack.claims.immutableHash ||
+                      peer.sent[ack.claims.packetID] == ack.claims.immutableHash else { throw PechPechError.authenticationFailed }
                 guard !removing.contains(ack.claims.packetID), removing.count < 64 else { return }
                 removing.insert(ack.claims.packetID)
                 Task { [weak self] in
                     guard let self else { return }
                     defer { if self.generation == epoch { self.removing.remove(ack.claims.packetID) } }
                     guard self.isCurrent(epoch) else { return }
-                    do { try await self.removeRelay(ack.claims.packetID) }
+                    // A synchronous ACK must not retire bytes when local queue admission failed.
+                    guard peer.queued[ack.claims.packetID]?.hash == ack.claims.immutableHash else { return }
+                    do {
+                        try await self.removeRelay(ack.claims.packetID)
+                        if peer.queued[ack.claims.packetID]?.hash == ack.claims.immutableHash {
+                            peer.queued.removeValue(forKey: ack.claims.packetID)
+                        }
+                    }
                     catch { if self.isCurrent(epoch) { self.report(error) } }
                 }
                 return
@@ -421,9 +486,26 @@ public struct SignedOpaqueAck: Codable, Equatable, Sendable {
             guard slot != source, let peer = peers[slot], peer.ready, let neighbor = peer.remoteIdentity,
                   neighbor.id != packet.originID, peer.sent[packet.id] == nil,
                   !peer.sourcePackets.contains(packet.id), peer.sent.count < Self.maximumPendingPerPass else { continue }
+            // Event-driven hosts may have no timer tick to discard expired proof.
+            if peer.queued.count >= Self.maximumPendingPerPass, peer.queued[packet.id] == nil {
+                let now = WireCoding.now
+                peer.queued = peer.queued.filter { $0.value.expiresAt > now }
+            }
+            if let queued = peer.queued[packet.id], queued.hash != packet.immutableHash {
+                report(PechPechError.messageConflict)
+                continue
+            }
+            guard peer.queued[packet.id] != nil || peer.queued.count < Self.maximumPendingPerPass else {
+                onEvent?(.relayBackpressure)
+                continue
+            }
             // Set before synchronous custom-adapter reentrancy, roll back on local backpressure.
             peer.sent[packet.id] = packet.immutableHash
-            if !send(packet.bytes, to: slot, priority: packet.priority, epoch: epoch) { peer.sent.removeValue(forKey: packet.id) }
+            if send(packet.bytes, to: slot, priority: packet.priority, epoch: epoch) {
+                if isCurrent(epoch), peers[slot] === peer, peer.queued[packet.id] == nil {
+                    peer.queued[packet.id] = QueuedPacket(hash: packet.immutableHash, expiresAt: packet.expiresAt)
+                }
+            } else { peer.sent.removeValue(forKey: packet.id) }
         }
     }
     private func send(_ bytes: Data, to slot: Slot, priority: Int, epoch: UInt64) -> Bool {
