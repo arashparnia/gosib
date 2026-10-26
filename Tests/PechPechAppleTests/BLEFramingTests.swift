@@ -3,7 +3,7 @@ import Foundation
 import XCTest
 @testable import PechPechApple
 
-/// Exercises codecs without instantiating any radio manager.
+/// Exercises codecs and startup cancellation without instantiating any radio manager.
 final class BLEFramingTests: XCTestCase {
     struct CheckFailure: Error, CustomStringConvertible { let description: String }
     static func check(_ value: @autoclosure () throws -> Bool, _ message: String) throws {
@@ -36,6 +36,47 @@ final class BLEFramingTests: XCTestCase {
     func testFramingAndQueueInvariants() throws {
         try Self.runOriginalBoundarySuite()
     }
+
+    #if canImport(CoreBluetooth)
+    @MainActor func testStopFromStartupStatePreventsRadioManagerCreation() {
+        let link = BLEPacketLink()
+        defer { link.onState = nil; link.stop() }
+        var states = 0
+        link.onState = { _ in states += 1; link.stop() }
+        link.start(nodeName: "synthetic-startup-stop")
+        XCTAssertEqual(states, 1)
+        XCTAssertFalse(link.running)
+        XCTAssertFalse(link.hasRadioManagers, "A stop from the startup callback must precede any native manager creation.")
+    }
+
+    @MainActor func testStopFromInitialPeerNotificationCancelsBLEStartWithoutRecursion() {
+        let link = BLEPacketLink()
+        defer { link.onPeers = nil; link.stop() }
+        var notifications = 0
+        link.onPeers = { _ in notifications += 1; link.stop() }
+        link.start(nodeName: "synthetic-peer-stop")
+        XCTAssertEqual(notifications, 1)
+        XCTAssertFalse(link.running)
+        XCTAssertFalse(link.hasRadioManagers)
+        link.stop()
+        XCTAssertEqual(notifications, 1)
+    }
+
+    @MainActor func testNestedStartupCannotCreateManagersAfterReplacementSessionStops() {
+        let link = BLEPacketLink()
+        defer { link.onState = nil; link.stop() }
+        var states = 0
+        link.onState = { _ in
+            states += 1
+            if states == 1 { link.start(nodeName: "synthetic-replacement") }
+            else { link.stop() }
+        }
+        link.start(nodeName: "synthetic-original")
+        XCTAssertEqual(states, 2)
+        XCTAssertFalse(link.running)
+        XCTAssertFalse(link.hasRadioManagers, "Neither obsolete startup may create native managers after the replacement stops.")
+    }
+    #endif
 
     private static func runOriginalBoundarySuite() throws {
         for maximum in [20, 21, 64, 185, 512] {

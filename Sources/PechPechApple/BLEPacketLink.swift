@@ -22,7 +22,8 @@ public final class BLEPacketLink: NSObject, PacketLink {
     private static let connectionTimeout: TimeInterval = 20
     private static let fragmentTimeout: TimeInterval = 20
 
-    private var running = false
+    private(set) var running = false
+    private var generation = UUID()
     private var serviceName = ""
     private var centralManager: CBCentralManager?
     private var peripheralManager: CBPeripheralManager?
@@ -40,6 +41,8 @@ public final class BLEPacketLink: NSObject, PacketLink {
     private var reportedPeerLimit = false
     private var startupWaitBegan: Date?
     private var reportedStartupWait = false
+
+    var hasRadioManagers: Bool { centralManager != nil || peripheralManager != nil }
 
     private final class ClientLink {
         let peripheral: CBPeripheral
@@ -74,27 +77,38 @@ public final class BLEPacketLink: NSObject, PacketLink {
 
     /// Use a stable, unique node identity. Discovery names select topology, never trust.
     public func start(nodeName: String = UUID().uuidString) {
-        stop()
+        let token = UUID()
+        stopSession(token: token)
+        guard generation == token, !running else { return }
         running = true
         self.serviceName = DiscoveryName.make(from: nodeName)
         reportedPeerLimit = false
         startupWaitBegan = Date()
         reportedStartupWait = false
         onState?("BLE waiting for Bluetooth permission and power")
+        guard isCurrent(token) else { return }
         centralManager = CBCentralManager(delegate: self, queue: .main)
         peripheralManager = CBPeripheralManager(delegate: self, queue: .main)
         maintenanceTask = Task { [weak self] in
             while !Task.isCancelled {
                 do { try await Task.sleep(nanoseconds: 1_000_000_000) }
                 catch { return }
-                guard !Task.isCancelled else { return }
-                self?.maintainLinks()
+                guard !Task.isCancelled, let self, self.isCurrent(token) else { return }
+                self.maintainLinks()
             }
         }
     }
 
     public func stop() {
+        let token = UUID()
+        // Invalidate an enclosing start even when its cleanup has already stopped us.
+        guard running else { generation = token; return }
+        stopSession(token: token)
+    }
+
+    private func stopSession(token: UUID) {
         running = false
+        generation = token
         maintenanceTask?.cancel()
         maintenanceTask = nil
         let disconnected = clients.values.filter(\.ready).map { "c:" + $0.peripheral.identifier.uuidString }
@@ -128,10 +142,18 @@ public final class BLEPacketLink: NSObject, PacketLink {
         startupWaitBegan = nil
         reportedStartupWait = false
         onPeers?([])
-        for peer in disconnected { onDisconnected?(peer) }
+        for peer in disconnected {
+            guard generation == token else { return }
+            onDisconnected?(peer)
+        }
     }
 
     deinit { maintenanceTask?.cancel() }
+
+    private func isCurrent(_ token: UUID) -> Bool { running && generation == token }
+    private func isCurrent(_ link: ClientLink) -> Bool {
+        running && clients[link.peripheral.identifier] === link
+    }
 
     /// This adapter grants no application permission. Discovery continues.
     public func confirmPeer(_ peerID: String) {}
@@ -202,7 +224,7 @@ public final class BLEPacketLink: NSObject, PacketLink {
     }
 
     private func connectIfDue(_ link: ClientLink) {
-        guard running, let manager = centralManager, manager.state == .poweredOn,
+        guard isCurrent(link), let manager = centralManager, manager.state == .poweredOn,
               !link.ready, !link.closing, link.attemptStarted == nil,
               link.peripheral.state == .disconnected, Date() >= link.retryAfter else { return }
         link.attemptStarted = Date()
@@ -217,7 +239,9 @@ public final class BLEPacketLink: NSObject, PacketLink {
         link.attemptStarted = nil
     }
 
-    private func clearClientChannel(_ link: ClientLink) {
+    @discardableResult private func clearClientChannel(_ link: ClientLink) -> Bool {
+        guard isCurrent(link) else { return false }
+        let token = generation
         let wasReady = link.ready
         let hadQueuedMessages = !link.outbox.messages.isEmpty
         link.ready = false
@@ -228,17 +252,21 @@ public final class BLEPacketLink: NSObject, PacketLink {
         link.outbox = BLEOutbox()
         if hadQueuedMessages {
             onState?("BLE link interrupted; transport queue discarded; application must retry unconfirmed messages")
+            guard isCurrent(token), isCurrent(link) else { return false }
         }
         if wasReady { onDisconnected?("c:" + link.peripheral.identifier.uuidString) }
+        return isCurrent(token) && isCurrent(link)
     }
 
     private func failClient(_ link: ClientLink, reason: String) {
+        guard isCurrent(link), let manager = centralManager else { return }
+        let token = generation
         onState?("BLE \(link.name): \(reason)")
-        clearClientChannel(link)
+        guard isCurrent(token), centralManager === manager, clearClientChannel(link) else { return }
         retryDelay(link)
         if link.peripheral.state != .disconnected {
             link.closing = true
-            centralManager?.cancelPeripheralConnection(link.peripheral)
+            manager.cancelPeripheralConnection(link.peripheral)
         } else {
             link.closing = false
         }
@@ -270,18 +298,25 @@ public final class BLEPacketLink: NSObject, PacketLink {
     }
 
     private func clearSubscribers() {
+        let token = generation
         let peers = subscribers.keys.map { "p:" + $0.uuidString }
-        if subscribers.values.contains(where: { !$0.outbox.messages.isEmpty }) {
-            onState?("BLE notifications interrupted; application must retry unconfirmed messages")
-        }
+        let hadQueuedMessages = subscribers.values.contains(where: { !$0.outbox.messages.isEmpty })
         subscribers.removeAll()
         notificationBlocked = false
+        if hadQueuedMessages {
+            onState?("BLE notifications interrupted; application must retry unconfirmed messages")
+            guard isCurrent(token) else { return }
+        }
         publishPeers()
-        for peer in peers { onDisconnected?(peer) }
+        for peer in peers {
+            guard isCurrent(token) else { return }
+            onDisconnected?(peer)
+        }
     }
 
     private func maintainLinks() {
         guard running else { return }
+        let token = generation
         let now = Date()
         let managerState = centralManager?.state
         if managerState == .unknown, !reportedStartupWait,
@@ -289,10 +324,15 @@ public final class BLEPacketLink: NSObject, PacketLink {
             reportedStartupWait = true
             onState?("BLE still waiting for Bluetooth authorization or system initialization. Keep PechPech foreground; if no prompt appears, check its Bluetooth permission in system privacy settings and confirm Bluetooth is on.")
         }
+        guard isCurrent(token) else { return }
         ensureScanning()
+        guard isCurrent(token) else { return }
         ensureAdvertising()
+        guard isCurrent(token) else { return }
         do {
             for link in Array(clients.values) {
+                guard isCurrent(token) else { return }
+                guard isCurrent(link) else { continue }
                 if !link.ready, link.peripheral.state == .disconnected, now.timeIntervalSince(link.lastSeen) > 30 {
                     clients.removeValue(forKey: link.peripheral.identifier)
                     link.peripheral.delegate = nil
@@ -309,6 +349,8 @@ public final class BLEPacketLink: NSObject, PacketLink {
                           now.timeIntervalSince(began) > Self.fragmentTimeout {
                     failClient(link, reason: "write response timed out; retrying")
                 }
+                guard isCurrent(token) else { return }
+                guard isCurrent(link) else { continue }
                 if link.inbound.discardIfInactive(before: now.timeIntervalSinceReferenceDate - Self.fragmentTimeout) {
                     onState?("BLE discarded an incomplete incoming message after inactivity")
                 }
@@ -317,6 +359,7 @@ public final class BLEPacketLink: NSObject, PacketLink {
         }
         do {
             for link in subscribers.values {
+                guard isCurrent(token) else { return }
                 if link.inbound.discardIfInactive(before: now.timeIntervalSinceReferenceDate - Self.fragmentTimeout) {
                     onState?("BLE discarded an incomplete incoming message after inactivity")
                 }
@@ -325,7 +368,7 @@ public final class BLEPacketLink: NSObject, PacketLink {
     }
 
     private func pumpWrites(_ link: ClientLink) {
-        guard running, link.ready, link.inFlightPayloadBytes == nil,
+        guard isCurrent(link), link.ready, link.inFlightPayloadBytes == nil,
               link.peripheral.state == .connected, let characteristic = link.characteristic,
               !link.outbox.messages.isEmpty else { return }
         if characteristic.properties.contains(.writeWithoutResponse) {
@@ -347,16 +390,19 @@ public final class BLEPacketLink: NSObject, PacketLink {
         guard running, !notificationBlocked, !pumpingNotifications,
               let manager = peripheralManager, manager.state == .poweredOn,
               let characteristic = messageCharacteristic else { return }
+        let token = generation
         pumpingNotifications = true
-        defer { pumpingNotifications = false }
+        defer { if generation == token { pumpingNotifications = false } }
         // One fragment per peer per pass keeps large messages from monopolizing
         // the shared notification queue. A false update must be retried unchanged.
         while true {
+            guard isCurrent(token), peripheralManager === manager else { return }
             let ids = subscribers.keys.sorted { $0.uuidString < $1.uuidString }
             guard !ids.isEmpty else { return }
             let start = notificationCursor % ids.count
             var madeProgress = false
             for index in 0..<ids.count {
+                guard isCurrent(token), peripheralManager === manager else { return }
                 let position = (start + index) % ids.count
                 guard let link = subscribers[ids[position]], !link.outbox.messages.isEmpty else { continue }
                 guard let fragment = link.outbox.nextFragment(maximumValueBytes: link.central.maximumUpdateValueLength) else {
@@ -383,14 +429,18 @@ public final class BLEPacketLink: NSObject, PacketLink {
 extension BLEPacketLink: @preconcurrency CBCentralManagerDelegate {
     public func centralManagerDidUpdateState(_ central: CBCentralManager) {
         guard central === centralManager, running else { return }
+        let token = generation
         onState?("BLE: \(describe(central.state))")
+        guard isCurrent(token), central === centralManager else { return }
         if central.state == .poweredOn {
             ensureScanning()
         } else {
-            for link in clients.values {
+            for link in Array(clients.values) {
+                guard isCurrent(token), central === centralManager else { return }
                 link.peripheral.delegate = nil
-                clearClientChannel(link)
+                guard clearClientChannel(link) else { return }
             }
+            guard isCurrent(token), central === centralManager else { return }
             clients.removeAll()
             publishPeers()
         }
@@ -427,23 +477,24 @@ extension BLEPacketLink: @preconcurrency CBCentralManagerDelegate {
 
     public func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         guard central === centralManager, running,
-              let link = clients[peripheral.identifier], !link.closing else { return }
+              let link = clients[peripheral.identifier], link.peripheral === peripheral, !link.closing else { return }
         peripheral.delegate = self
         peripheral.discoverServices([Self.serviceUUID])
     }
 
     public func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
-        guard central === centralManager, running, let link = clients[peripheral.identifier] else { return }
-        clearClientChannel(link)
+        guard central === centralManager, running, let link = clients[peripheral.identifier],
+              link.peripheral === peripheral, clearClientChannel(link) else { return }
         link.closing = false
         retryDelay(link)
         onState?("BLE connection failed: \(error?.localizedDescription ?? "unknown cause"); retrying")
     }
 
     public func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        guard central === centralManager, running, let link = clients[peripheral.identifier] else { return }
+        guard central === centralManager, running, let link = clients[peripheral.identifier],
+              link.peripheral === peripheral else { return }
         let hadRequestedClose = link.closing
-        clearClientChannel(link)
+        guard clearClientChannel(link) else { return }
         link.closing = false
         if !hadRequestedClose { retryDelay(link) }
         onState?("BLE disconnected from \(link.name); discovery and reconnect remain active")
@@ -452,10 +503,10 @@ extension BLEPacketLink: @preconcurrency CBCentralManagerDelegate {
 
 extension BLEPacketLink: @preconcurrency CBPeripheralDelegate {
     public func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
-        if let link = clients[peripheral.identifier] { pumpWrites(link) }
+        if let link = clients[peripheral.identifier], link.peripheral === peripheral { pumpWrites(link) }
     }
     public func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        guard running, let link = clients[peripheral.identifier], !link.closing else { return }
+        guard running, let link = clients[peripheral.identifier], link.peripheral === peripheral, !link.closing else { return }
         guard error == nil, let service = peripheral.services?.first(where: { $0.uuid == Self.serviceUUID }) else {
             failClient(link, reason: "PechPech service discovery failed")
             return
@@ -464,7 +515,7 @@ extension BLEPacketLink: @preconcurrency CBPeripheralDelegate {
     }
 
     public func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
-        guard running, let link = clients[peripheral.identifier], !link.closing,
+        guard running, let link = clients[peripheral.identifier], link.peripheral === peripheral, !link.closing,
               service.uuid == Self.serviceUUID else { return }
         guard error == nil,
               let characteristic = service.characteristics?.first(where: { $0.uuid == Self.messageUUID }),
@@ -477,8 +528,9 @@ extension BLEPacketLink: @preconcurrency CBPeripheralDelegate {
     }
 
     public func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
-        guard running, let link = clients[peripheral.identifier], !link.closing,
+        guard running, let link = clients[peripheral.identifier], link.peripheral === peripheral, !link.closing,
               characteristic === link.characteristic else { return }
+        let token = generation
         guard error == nil, characteristic.isNotifying else {
             failClient(link, reason: "notification subscription failed")
             return
@@ -488,12 +540,13 @@ extension BLEPacketLink: @preconcurrency CBPeripheralDelegate {
         link.attemptStarted = nil
         link.attempts = 0
         onState?("BLE link ready: \(link.name)")
+        guard isCurrent(token), isCurrent(link), link.ready else { return }
         onLinkReady?("c:" + peripheral.identifier.uuidString)
         pumpWrites(link)
     }
 
     public func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
-        guard running, let link = clients[peripheral.identifier], link.ready,
+        guard running, let link = clients[peripheral.identifier], link.peripheral === peripheral, link.ready,
               characteristic === link.characteristic, let payloadBytes = link.inFlightPayloadBytes else { return }
         guard error == nil else {
             failClient(link, reason: "fragment write failed: \(error!.localizedDescription)")
@@ -506,7 +559,7 @@ extension BLEPacketLink: @preconcurrency CBPeripheralDelegate {
     }
 
     public func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
-        guard running, let link = clients[peripheral.identifier], link.ready,
+        guard running, let link = clients[peripheral.identifier], link.peripheral === peripheral, link.ready,
               characteristic === link.characteristic else { return }
         guard error == nil, let value = characteristic.value else {
             failClient(link, reason: "incoming notification failed")
@@ -524,7 +577,7 @@ extension BLEPacketLink: @preconcurrency CBPeripheralDelegate {
 
     public func peripheral(_ peripheral: CBPeripheral, didModifyServices invalidatedServices: [CBService]) {
         guard running, invalidatedServices.contains(where: { $0.uuid == Self.serviceUUID }),
-              let link = clients[peripheral.identifier] else { return }
+              let link = clients[peripheral.identifier], link.peripheral === peripheral else { return }
         failClient(link, reason: "PechPech service changed; reconnecting")
     }
 }
@@ -532,15 +585,17 @@ extension BLEPacketLink: @preconcurrency CBPeripheralDelegate {
 extension BLEPacketLink: @preconcurrency CBPeripheralManagerDelegate {
     public func peripheralManagerDidUpdateState(_ peripheral: CBPeripheralManager) {
         guard peripheral === peripheralManager, running else { return }
+        let token = generation
         onState?("BLE: \(describe(peripheral.state))")
+        guard isCurrent(token), peripheral === peripheralManager else { return }
         if peripheral.state == .poweredOn {
             ensureAdvertising()
         } else {
-            clearSubscribers()
             serviceAdded = false
             addingService = false
             advertisingRequested = false
             messageCharacteristic = nil
+            clearSubscribers()
         }
     }
 
@@ -574,9 +629,13 @@ extension BLEPacketLink: @preconcurrency CBPeripheralManagerDelegate {
             onState?("BLE subscriber limit reached (\(Self.maximumPeers)); extra client cannot exchange messages")
             return
         }
-        subscribers[central.identifier] = SubscriberLink(central: central)
+        let token = generation
+        let link = SubscriberLink(central: central)
+        subscribers[central.identifier] = link
         publishPeers()
+        guard isCurrent(token), peripheral === peripheralManager, subscribers[central.identifier] === link else { return }
         onState?("BLE client subscribed: \(central.identifier.uuidString.prefix(8))")
+        guard isCurrent(token), peripheral === peripheralManager, subscribers[central.identifier] === link else { return }
         onLinkReady?("p:" + central.identifier.uuidString)
     }
 
@@ -585,11 +644,15 @@ extension BLEPacketLink: @preconcurrency CBPeripheralManagerDelegate {
         guard peripheral === peripheralManager, running,
               characteristic.uuid == Self.messageUUID,
               let link = subscribers.removeValue(forKey: central.identifier) else { return }
+        let token = generation
         if !link.outbox.messages.isEmpty {
             onState?("BLE client unsubscribed with queued messages; application must retry")
+            guard isCurrent(token), peripheral === peripheralManager else { return }
         }
         publishPeers()
+        guard isCurrent(token), peripheral === peripheralManager else { return }
         onDisconnected?("p:" + central.identifier.uuidString)
+        guard isCurrent(token), peripheral === peripheralManager else { return }
         notificationBlocked = false
         pumpNotifications()
     }
@@ -602,6 +665,7 @@ extension BLEPacketLink: @preconcurrency CBPeripheralManagerDelegate {
 
     public func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveWrite requests: [CBATTRequest]) {
         guard peripheral === peripheralManager, running, let first = requests.first else { return }
+        let token = generation
         // Apple requires one ATT response per batch and atomic application of all
         // requests. Validate/reassemble value copies before changing live buffers.
         var staged: [UUID: BLEReassembler] = [:]
@@ -636,7 +700,10 @@ extension BLEPacketLink: @preconcurrency CBPeripheralManagerDelegate {
         }
         for (id, reassembler) in staged { subscribers[id]?.inbound = reassembler }
         peripheral.respond(to: first, withResult: .success)
-        for (message, peerID) in complete { onMessage?(message, peerID) }
+        for (message, peerID) in complete {
+            guard isCurrent(token), peripheral === peripheralManager else { return }
+            onMessage?(message, peerID)
+        }
     }
 }
 #endif

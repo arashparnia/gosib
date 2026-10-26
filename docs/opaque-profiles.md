@@ -6,7 +6,7 @@ This feature does not wrap a host packet in the generic `EndpointEnvelope` or in
 
 ## Assemble a profile
 
-Choose a stable, versioned profile identifier, 1–128 UTF-8 bytes. All participating hosts must implement the same profile and codecs. Attach native `BLEPacketLink` and `TCPPacketLink` instances, or an independent `PacketLink` adapter. The router owns their callbacks; do not attach the same instances to another node/router.
+Choose a stable, versioned profile identifier, 1–128 UTF-8 bytes. Profile matching compares exact UTF-8 without Unicode normalization, including in signed hello and acknowledgment validation. All participating hosts must implement the same profile and codecs. Attach native `BLEPacketLink` and `TCPPacketLink` instances, or an independent `PacketLink` adapter. The router owns their callbacks; do not attach the same instances to another node/router.
 
 Supply these host hooks:
 

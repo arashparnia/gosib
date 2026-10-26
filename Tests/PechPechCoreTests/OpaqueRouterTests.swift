@@ -192,6 +192,20 @@ final class OpaqueRouterTests: XCTestCase {
         XCTAssertTrue(hb.inbox.isEmpty)
     }
 
+    func testCanonicallyEquivalentProfilesRemainByteDistinctForHelloAndAck() throws {
+        let composed = "tests.caf\u{00E9}.v1", decomposed = "tests.cafe\u{0301}.v1"
+        XCTAssertEqual(composed, decomposed, "Swift String equality treats these Unicode representations as equivalent.")
+        XCTAssertFalse(composed.utf8.elementsEqual(decomposed.utf8))
+        let sender = Identity(), recipient = Identity(), challenge = UUID()
+        let hello = try SignedOpaqueHello(identity: sender, profile: composed, challenge: challenge,
+                                           routes: [sender.publicIdentity.id: 0])
+        XCTAssertNoThrow(try hello.validate(profile: composed))
+        XCTAssertThrowsError(try hello.validate(profile: decomposed))
+        let ack = try SignedOpaqueAck(identity: recipient, profile: composed, packet: packet(sender, recipient), echo: challenge)
+        XCTAssertNoThrow(try ack.validate(sender: recipient.publicIdentity, challenge: challenge, profile: composed))
+        XCTAssertThrowsError(try ack.validate(sender: recipient.publicIdentity, challenge: challenge, profile: decomposed))
+    }
+
     @MainActor func testStaleWrongHashAndForeignProfileAcksCannotRemoveHostRelay() async throws {
         let origin = Identity(), relay = Identity(), endpoint = Identity(), lr = OpaqueTestLink(), lb = OpaqueTestLink()
         let hr = OpaqueHost(), hb = OpaqueHost(), middle = try router(relay, lr, hr), receiver = try router(endpoint, lb, hb)
@@ -295,7 +309,7 @@ final class OpaqueRouterTests: XCTestCase {
         let la = OpaqueTestLink(), l1 = OpaqueTestLink(), l2 = OpaqueTestLink()
         let ha = OpaqueHost(), h1 = OpaqueHost(), h2 = OpaqueHost()
         let sender = try router(origin, la, ha), r1 = try router(first, l1, h1), r2 = try router(second, l2, h2)
-        defer { sender.stop(); r1.stop(); r2.stop() }
+        defer { la.reject = nil; sender.stop(); r1.stop(); r2.stop() }
         sender.start(); r1.start(); r2.start(); la.connect(l1); la.connect(l2); await settle()
         var restarted = false
         la.reject = { bytes in
@@ -343,9 +357,9 @@ final class OpaqueRouterTests: XCTestCase {
     @MainActor func testStopIsIdempotentWhenTopologyCallbackStopsAgain() throws {
         let node = try router(Identity(), OpaqueTestLink(), OpaqueHost())
         var notifications = 0
-        node.onNeighbors = { _ in
+        node.onNeighbors = { [weak node] _ in
             notifications += 1
-            if notifications < 3 { node.stop() }
+            if notifications < 3 { node?.stop() }
         }
         node.start(); node.stop()
         XCTAssertEqual(notifications, 1)

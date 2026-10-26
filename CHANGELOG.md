@@ -2,11 +2,12 @@
 
 ## 0.3.1 — 26 October 2026
 
-- Compare immutable messages and retry channels by exact UTF-8, rejecting changed Unicode encodings under an existing ID. Add a synthetic cross-language encoding/hash vector without changing wire version 2.
+- Compare immutable messages, retry channels and opaque profile identifiers by exact UTF-8, rejecting changed Unicode encodings under an existing ID and keeping byte-distinct profiles isolated. Add a synthetic cross-language encoding/hash vector without changing wire version 2.
 - Preserve pause/stop intent across synchronous host and adapter callbacks. Obsolete forwarding and handshake work cannot continue through a replacement session, repeated stops are idempotent, and requested restarts wait for all adapters to close. A later stop cancels a requested restart.
 - Bound generic custom-adapter handles to four per adapter and reject opaque decoders that replace original packet bytes before durable hooks run.
 - Enforce the 16 KiB limit on complete generic packet frames before relay admission, including the JSON wrapper.
 - Refill available TCP connection slots from known Bonjour discoveries after disconnect/backoff, and gate connection callbacks against obsolete sessions.
+- Honor stop/restart callbacks during BLE startup and teardown before creating radio managers; prevent old client, subscriber and maintenance callbacks from continuing in replacement sessions.
 - Add regressions for these failures and verify annotated public tags through clean, exact-version SwiftPM consumers in both macOS CI jobs. Wire identifiers, cryptographic domains, APIs and database schemas are unchanged.
 
 ## 0.3.0 — 4 October 2026

@@ -53,7 +53,8 @@ public struct SignedOpaqueHello: Codable, Equatable, Sendable {
     }
     public func validate(profile: String) throws {
         try claims.identity.validate()
-        guard kind == "pechpech-opaque-hello", claims.protocolName == "pechpech-opaque-link-1", claims.profile == profile,
+        guard kind == "pechpech-opaque-hello", claims.protocolName == "pechpech-opaque-link-1",
+              claims.profile.utf8.elementsEqual(profile.utf8),
               !profile.isEmpty, profile.utf8.count <= 128, claims.routes.count <= 32,
               claims.routes.allSatisfy({ WireCoding.isAddress($0.key) && (0...7).contains($0.value) }),
               signature.count == 64,
@@ -87,7 +88,8 @@ public struct SignedOpaqueAck: Codable, Equatable, Sendable {
     }
     public func validate(sender: PublicIdentity, challenge: UUID, profile: String) throws {
         try sender.validate()
-        guard kind == "pechpech-opaque-stored", claims.protocolName == "pechpech-opaque-ack-1", claims.profile == profile,
+        guard kind == "pechpech-opaque-stored", claims.protocolName == "pechpech-opaque-ack-1",
+              claims.profile.utf8.elementsEqual(profile.utf8),
               !profile.isEmpty, profile.utf8.count <= 128,
               claims.senderID == sender.id, claims.echo == challenge, claims.immutableHash.count == 32, signature.count == 64,
               try Curve25519.Signing.PublicKey(rawRepresentation: sender.signingKey)
