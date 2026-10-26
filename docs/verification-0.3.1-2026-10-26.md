@@ -4,9 +4,21 @@ This patch preserves the generic version-2 wire encoding, opaque profile control
 
 ## Checks and release gate
 
-Local review used Linux with Node 26 and Python 3; this host has no Swift/Xcode toolchain. The independent Node/OpenSSL vectors and whitespace checks passed locally. Swift compilation, unit execution and Apple framework checks must therefore run on the project's Apple Silicon and Intel macOS CI runners before publication.
+Local review used Linux with Node 26 and Python 3; this host has no Swift/Xcode toolchain. The independent Node/OpenSSL vectors, Python syntax and whitespace checks passed locally. Apple checks ran remotely on the project's Apple Silicon and Intel macOS CI runners.
 
-The release is gated on the full CI matrix: unit tests, optimized build, independent encryption/control/UTF-8 vectors, source and compiled privacy/license resources, independent local-path consumer, iOS Simulator compile/resources and injected-link demo. Annotated-tag CI additionally builds a clean consumer of the public exact version and verifies its resolved commit and compiled resource bundles. See the [CI workflow](../.github/workflows/ci.yml); the [v0.3.1 release](https://github.com/arashparnia/pechpech/releases/tag/v0.3.1) will link the qualifying exact-commit run.
+The [final source candidate run](https://github.com/arashparnia/pechpech/actions/runs/40319525103) qualifies commit `55574723a3fd36623e1872e942080a33352cec95`. Both macOS jobs passed:
+
+| Check | Result on both architectures |
+| --- | --- |
+| Full unit suite | PASS — 84 tests: 70 Core, 14 Apple, zero failures |
+| Independent vectors | PASS — generic encryption, opaque controls and exact UTF-8 encodings/hashes |
+| Optimized SwiftPM build | PASS |
+| Source and compiled privacy/license resources | PASS |
+| Independent local-path library consumer | PASS |
+| Generic iOS Simulator compile and resources | PASS |
+| Injected-link two-hop delivery and duplicate suppression | PASS |
+
+Only verification/changelog documentation follows that source candidate. Publication remains gated on the exact annotated tag's full matrix, which additionally builds a clean consumer of the public exact version and verifies its resolved commit and compiled resource bundles. See the [CI workflow](../.github/workflows/ci.yml); the [v0.3.1 release](https://github.com/arashparnia/pechpech/releases/tag/v0.3.1) links the qualifying tagged run.
 
 ## Regression scope
 

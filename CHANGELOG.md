@@ -8,7 +8,7 @@
 - Enforce the 16 KiB limit on complete generic packet frames before relay admission, including the JSON wrapper.
 - Refill available TCP connection slots from known Bonjour discoveries after disconnect/backoff, and gate connection callbacks against obsolete sessions.
 - Honor stop/restart callbacks during BLE startup and teardown before creating radio managers; prevent old client, subscriber and maintenance callbacks from continuing in replacement sessions.
-- Add regressions for these failures and verify annotated public tags through clean, exact-version SwiftPM consumers in both macOS CI jobs. Wire identifiers, cryptographic domains, APIs and database schemas are unchanged.
+- Add 25 regressions, bringing the suite to 84 tests, and verify annotated public tags through clean, exact-version SwiftPM consumers in both macOS CI jobs. Wire identifiers, cryptographic domains, APIs and database schemas are unchanged.
 
 ## 0.3.0 — 4 October 2026
 
