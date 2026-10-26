@@ -3,6 +3,7 @@ name: PechPech package
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -55,3 +56,8 @@ jobs:
           --products-dir .build/ios-simulator/Build/Products/Debug-iphonesimulator
       - name: Injected-link demo
         run: swift run pechpech-demo
+      - name: Published release consumer
+        if: github.ref_type == 'tag'
+        env:
+          PECHPECH_RELEASE_TAG: ${{ github.ref_name }}
+        run: python3 scripts/check-release-consumer.py "$PECHPECH_RELEASE_TAG"

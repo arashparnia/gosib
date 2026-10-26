@@ -16,6 +16,8 @@ swift build --package-path Examples/PackageConsumer -c release
 
 The resource checker parses the source and built property lists and verifies that both library bundles contain the exact complete MIT notice. CI repeats this for SwiftPM macOS products and generic iOS Simulator products. Before publishing, also build a clean consumer of the public URL and exact new Git tag; local path resolution does not prove the remote release exists.
 
+Annotated version-tag pushes run the full CI matrix and `python3 scripts/check-release-consumer.py vMAJOR.MINOR.PATCH`. The latter builds a temporary consumer against the public repository with an exact version, checks the resolved revision against the reviewed checkout and peeled remote tag, and validates both compiled library resource bundles. Publish the GitHub prerelease only after that tagged run passes.
+
 ## SDK privacy declarations
 
 Each library explicitly packages `PrivacyInfo.xcprivacy` and `PechPech-LICENSE.txt` as target resources. SwiftPM/Xcode creates a resource bundle for each library; consumers must retain those bundles when distributing an app. A source package does not need a separate binary framework signature. PechPech does not distribute an XCFramework.

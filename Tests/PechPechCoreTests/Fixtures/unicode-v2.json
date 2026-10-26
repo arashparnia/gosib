@@ -1,0 +1,14 @@
+{
+  "composedChannelUTF8Hex": "636166c3a9",
+  "composedMessageHashBase64": "+zvDylN2Ziet9INd72Pbn+n/yOmdDtZtXmAbRSkNN6I=",
+  "composedMessageJSON": "{\"channel\":\"café\",\"createdAt\":1700000000000,\"destinationID\":\"b7f14a1587c8048c81d9e4e375b3d0bf2f404b55abd8f530606c357537768b45\",\"id\":\"00112233-4455-6677-8899-AABBCCDDEEFF\",\"payload\":\"AQ==\",\"senderID\":\"65cfd6e6e6236071241cbfdf7dfeb0920912879ad9c9d43c633c22ded54f4a83\"}",
+  "createdAt": "1700000000000",
+  "decomposedChannelUTF8Hex": "63616665cc81",
+  "decomposedMessageHashBase64": "MKYT+vTO2o21N5l/UAszL2geirTmtSH9tuw0D8LZ6Wg=",
+  "decomposedMessageJSON": "{\"channel\":\"café\",\"createdAt\":1700000000000,\"destinationID\":\"b7f14a1587c8048c81d9e4e375b3d0bf2f404b55abd8f530606c357537768b45\",\"id\":\"00112233-4455-6677-8899-AABBCCDDEEFF\",\"payload\":\"AQ==\",\"senderID\":\"65cfd6e6e6236071241cbfdf7dfeb0920912879ad9c9d43c633c22ded54f4a83\"}",
+  "messageID": "00112233-4455-6677-8899-AABBCCDDEEFF",
+  "notice": "Synthetic PechPech wire-v2 immutable-message UTF-8 vectors independently generated with Python. Canonically equivalent channel text has distinct bytes and message hashes; no Unicode normalization is applied.",
+  "payloadBase64": "AQ==",
+  "receiverAddress": "b7f14a1587c8048c81d9e4e375b3d0bf2f404b55abd8f530606c357537768b45",
+  "senderAddress": "65cfd6e6e6236071241cbfdf7dfeb0920912879ad9c9d43c633c22ded54f4a83"
+}

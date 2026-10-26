@@ -19,6 +19,8 @@ Supply these host hooks:
 | `removeRelay(UUID)` | Retire only the foreign relay record after an authenticated next-hop acknowledgment; never mark an owned command delivered |
 | `receiveEndpoint(OpaquePacket)` | Authenticate/decrypt, validate permission and complete the host's phase-specific processing; durably commit an applicable business result before issuing the host's business receipt |
 
+The descriptor returned by `decode` must retain the exact received `Data` in `bytes`. The router rejects a decoder that substitutes or re-encodes those bytes before any endpoint or relay persistence hook begins. The codec remains responsible for validating the relationship between its metadata, immutable hash and actual host envelope.
+
 Persistence and endpoint hooks are asynchronous. An error means no successful hop acknowledgment for that operation. The endpoint hook may intentionally handle a transient negotiation phase without a durable business result; that success must not be shown as completed business delivery. Throw `PechPechError.spoolFull` to expose relay backpressure through `onEvent`. Preserve independent owned-command and application-result records; a relay's bounded storage must not consume or discard them.
 
 The descriptor records a UUID, 64-character lowercase hexadecimal destination/origin identity addresses, 0–8 remaining hops, priority 0–3, expiry, complete bytes and a 32-byte immutable hash. Bytes must be nonempty and at most 16 KiB. Expiry must be in the future and no more than one day ahead at validation time. The host defines and validates the immutable hash over its actual signed packet fields; exclude only intentionally mutable forwarding data, such as the hop counter.
@@ -34,6 +36,8 @@ Persist an immutable owned command through the host's original outbox before `aw
 An authenticated next-hop acknowledgment can retire a foreign relay copy only after that peer's host hook succeeds. For a foreign relay, the hook must durably store the exact packet. For an endpoint, it confirms successful phase-specific handling in the current session; a preparation or grant phase may remain intentionally volatile. It says nothing about final kitchen acceptance or other business completion. Only the host's independently authenticated receipt for a durable business result can resolve that action. Lost acknowledgments or callbacks remain compatible with idempotent host retries.
 
 `stop()` closes links and gates late async continuations from sending on an obsolete session. An already-running durable host write or endpoint action cannot be recalled. Keep host processing transactional and idempotent, and do not accept unattended old actions merely because networking later returns.
+
+The same session checks apply after synchronous codec, adapter and topology callbacks. Repeated stops are idempotent. A restart requested while adapters are closing waits for their complete teardown; a later stop cancels that requested restart.
 
 Callbacks expose authenticated neighbor identities, signed route hints and link/storage events. Route hints are reachability estimates and can be dishonest, stale or interrupted; completion requires the host's receipt. Locking, suspension or leaving range may remove a path. Foreground operation is the initial qualified design scope.
 

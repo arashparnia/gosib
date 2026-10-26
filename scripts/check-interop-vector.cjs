@@ -102,6 +102,27 @@ assert.equal(signed.signature, fixture.signatureBase64);
 assert.ok(crypto.verify(null, Buffer.concat([aad, envelope]), signingPublic, Buffer.from(signed.signature, 'base64')));
 assert.equal(crypto.createHash('sha256').update(Buffer.from(fixture.messageJSON, 'utf8')).digest('base64'), fixture.messageHashBase64);
 
+const unicodeFixture = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'Tests', 'PechPechCoreTests', 'Fixtures', 'unicode-v2.json'), 'utf8'));
+assert.equal(unicodeFixture.senderAddress, address(senderIdentity));
+assert.equal(unicodeFixture.receiverAddress, address(receiverIdentity));
+assert.equal(unicodeFixture.messageID, '00112233-4455-6677-8899-AABBCCDDEEFF');
+assert.equal(unicodeFixture.createdAt, '1700000000000');
+assert.equal(unicodeFixture.payloadBase64, Buffer.from([1]).toString('base64'));
+for (const [name, channel] of [['composed', 'caf\u00e9'], ['decomposed', 'cafe\u0301']]) {
+  const unicodeMessage = {
+    id: unicodeFixture.messageID, senderID: unicodeFixture.senderAddress,
+    destinationID: unicodeFixture.receiverAddress, channel,
+    payload: unicodeFixture.payloadBase64, createdAt: Number(unicodeFixture.createdAt)
+  };
+  const bytes = Buffer.from(canonical(unicodeMessage), 'utf8');
+  assert.equal(Buffer.from(channel, 'utf8').toString('hex'), unicodeFixture[name + 'ChannelUTF8Hex']);
+  assert.equal(bytes.toString('utf8'), unicodeFixture[name + 'MessageJSON']);
+  assert.equal(crypto.createHash('sha256').update(bytes).digest('base64'), unicodeFixture[name + 'MessageHashBase64']);
+}
+assert.equal('caf\u00e9'.normalize('NFC'), 'cafe\u0301'.normalize('NFC'));
+assert.notEqual(unicodeFixture.composedMessageJSON, unicodeFixture.decomposedMessageJSON);
+assert.notEqual(unicodeFixture.composedMessageHashBase64, unicodeFixture.decomposedMessageHashBase64);
+
 const opaqueFixture = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'Tests', 'PechPechCoreTests', 'Fixtures', 'opaque-control-v1.json'), 'utf8'));
 assert.equal(opaqueFixture.syntheticInputs,
   'Ed25519 seed=11 hex repeated 32; X25519=12 hex repeated 32; immutableHash=13 hex repeated 32');
@@ -144,4 +165,4 @@ for (const [name, claims, kind] of [
   assert.ok(crypto.verify(null, Buffer.from(canonical(claims), 'utf8'), crypto.createPublicKey(opaqueSigning), Buffer.from(signature, 'base64')));
 }
 
-console.log('PASS: PechPech generic-v2 encryption and opaque-control-v1 hello/ACK vectors: exact canonical bytes, identities/address hashes, Ed25519 signatures, bidirectional X25519 agreement, HKDF-SHA256 and authenticated AES-256-GCM decryption verified with Node/OpenSSL. Synthetic inputs only; no radio or platform implementation claim.');
+console.log('PASS: PechPech generic-v2 encryption, Unicode immutable-message and opaque-control-v1 hello/ACK vectors: exact canonical UTF-8 bytes/message hashes, identities/address hashes, Ed25519 signatures, bidirectional X25519 agreement, HKDF-SHA256 and authenticated AES-256-GCM decryption verified with Node/OpenSSL. Synthetic inputs only; no radio or platform implementation claim.');

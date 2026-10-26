@@ -31,7 +31,7 @@ public final class TCPPacketLink: PacketLink {
     private var setupTimeouts: [String: DispatchWorkItem] = [:]
     private var frameTimeouts: [String: DispatchWorkItem] = [:]
     private var generation = UUID()
-    private var running = false
+    private(set) var running = false
 
     public init(includePeerToPeer: Bool = true) {
         self.includePeerToPeer = includePeerToPeer
@@ -39,10 +39,13 @@ public final class TCPPacketLink: PacketLink {
 
     /// Use a stable, unique node identity. Discovery names select topology, never trust.
     public func start(nodeName: String = UUID().uuidString) {
-        stop()
+        let token = UUID()
+        stopSession(token: token)
+        guard generation == token, !running else { return }
         running = true
         localServiceName = DiscoveryName.make(from: nodeName)
         startListener(name: localServiceName)
+        guard running, generation == token else { return }
         startBrowser()
     }
 
@@ -88,8 +91,16 @@ public final class TCPPacketLink: PacketLink {
     }
 
     public func stop() {
+        let token = UUID()
+        // A stop from a stop notification still cancels an enclosing start,
+        // without recursively publishing the same empty topology.
+        guard running else { generation = token; return }
+        stopSession(token: token)
+    }
+
+    private func stopSession(token: UUID) {
         running = false
-        generation = UUID()
+        generation = token
         browser?.stateUpdateHandler = nil
         browser?.browseResultsChangedHandler = nil
         browser?.cancel()
@@ -117,7 +128,11 @@ public final class TCPPacketLink: PacketLink {
         authenticatedPeers.removeAll()
         queuedBytes.removeAll()
         retryAttempts.removeAll()
-        disconnected.forEach { onDisconnected?($0) }
+        for peerID in disconnected {
+            guard generation == token else { return }
+            onDisconnected?(peerID)
+        }
+        guard generation == token else { return }
         onPeers?([])
     }
 
@@ -182,6 +197,7 @@ public final class TCPPacketLink: PacketLink {
                     self.onState?("Discovery waiting: \(error.localizedDescription)")
                 case .failed(let error):
                     self.onState?("Discovery failed: \(error.localizedDescription). Check local-network permission.")
+                    guard self.running, self.browser === newBrowser else { return }
                     newBrowser.stateUpdateHandler = nil
                     newBrowser.browseResultsChangedHandler = nil
                     newBrowser.cancel()
@@ -200,6 +216,7 @@ public final class TCPPacketLink: PacketLink {
         newBrowser.browseResultsChangedHandler = { [weak self] results, _ in
             Task { @MainActor in
                 guard let self, self.browser === newBrowser, self.running else { return }
+                let token = self.generation
                 let candidates = results.map(\.endpoint).filter { self.displayName(for: $0) > self.localServiceName }
                     .sorted { self.identifier(for: $0) < self.identifier(for: $1) }
                 let current = Array(candidates.prefix(32))
@@ -216,10 +233,9 @@ public final class TCPPacketLink: PacketLink {
                     let id = self.identifier(for: endpoint)
                     self.endpoints[id] = endpoint
                     self.names[id] = self.displayName(for: endpoint)
-                    if self.connections[id] == nil, self.retries[id] == nil, self.connections.count < 4 {
-                        self.install(NWConnection(to: endpoint, using: self.parameters()), peerID: id)
-                    }
                 }
+                self.connectAvailableEndpoints()
+                guard self.running, self.generation == token else { return }
                 self.publishPeers()
             }
         }
@@ -238,10 +254,24 @@ public final class TCPPacketLink: PacketLink {
         return endpoint.debugDescription
     }
 
+    private func connectAvailableEndpoints() {
+        guard running else { return }
+        let token = generation
+        let candidates = TCPConnectionCandidates.select(known: Set(endpoints.keys),
+            connected: Set(connections.keys), retrying: Set(retries.keys))
+        for id in candidates {
+            // Callbacks during installation may stop the adapter or occupy another slot.
+            guard running, generation == token, connections.count < 4 else { return }
+            guard connections[id] == nil, retries[id] == nil, let endpoint = endpoints[id] else { continue }
+            install(NWConnection(to: endpoint, using: parameters()), peerID: id)
+        }
+    }
+
     private func install(_ connection: NWConnection, peerID: String) {
         connections[peerID] = connection
         armSetupTimeout(peerID, connection: connection)
         publishPeers()
+        guard running, connections[peerID] === connection else { return }
         connection.stateUpdateHandler = { [weak self] state in
             Task { @MainActor in
                 guard let self, self.connections[peerID] === connection else { return }
@@ -252,7 +282,9 @@ public final class TCPPacketLink: PacketLink {
                     self.retries.removeValue(forKey: peerID)?.cancel()
                     self.armSetupTimeout(peerID, connection: connection)
                     self.onState?("TCP connected over \(self.pathDescription(connection.currentPath)); \(self.modeDescription).")
+                    guard self.running, self.connections[peerID] === connection else { return }
                     self.onLinkReady?(peerID)
+                    guard self.running, self.connections[peerID] === connection else { return }
                     self.readHeader(from: connection, peerID: peerID)
                     // Browser discovery continues until core authenticates the neighbor
                     // identity. TCP readiness is not authentication.
@@ -334,6 +366,7 @@ public final class TCPPacketLink: PacketLink {
 
     private func drop(_ peerID: String, connection: NWConnection, retry: Bool) {
         guard connections[peerID] === connection else { return }
+        let token = generation
         connections.removeValue(forKey: peerID)
         readyPeers.remove(peerID)
         authenticatedPeers.remove(peerID)
@@ -343,21 +376,31 @@ public final class TCPPacketLink: PacketLink {
         connection.stateUpdateHandler = nil
         connection.pathUpdateHandler = nil
         connection.cancel()
+        if !retry {
+            // Invalid framing must not immediately redial the same discovery.
+            // A later Bonjour result update may make the endpoint eligible again.
+            endpoints.removeValue(forKey: peerID)
+            retryAttempts.removeValue(forKey: peerID)
+        }
         onDisconnected?(peerID)
+        guard running, generation == token else { return }
         if endpoints[peerID] == nil { names.removeValue(forKey: peerID) }
         publishPeers()
-        guard running, retry else { return }
+        guard running, generation == token else { return }
+        defer { connectAvailableEndpoints() }
+        guard retry else { return }
         startBrowser()
         guard let endpoint = endpoints[peerID], retries[peerID] == nil else { return }
         let attempt = min(retryAttempts[peerID, default: 0] + 1, 4)
         retryAttempts[peerID] = attempt
-        let token = generation
         let work = DispatchWorkItem { [weak self] in
             Task { @MainActor in
                 guard let self, self.running, self.generation == token else { return }
                 self.retries.removeValue(forKey: peerID)
-                guard self.endpoints[peerID] == endpoint, self.connections[peerID] == nil, self.connections.count < 4 else { return }
-                self.install(NWConnection(to: endpoint, using: self.parameters()), peerID: peerID)
+                // If all slots are occupied now, the endpoint remains eligible for
+                // the next disconnect rather than losing its only retry opportunity.
+                guard self.endpoints[peerID] == endpoint else { return }
+                self.connectAvailableEndpoints()
             }
         }
         retries[peerID] = work

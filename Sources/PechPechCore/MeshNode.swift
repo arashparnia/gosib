@@ -20,11 +20,14 @@ public enum NodeEvent: Equatable, Sendable {
     private let links: [any PacketLink]
     private var timer: Task<Void, Never>?
     private var running = false
+    private var stopping = false
+    private var restartRequested = false
+    private var generation: UInt64 = 0
     private var active = Set<UUID>()
     private var origins: [UUID: RelayPacket] = [:]
     private var acknowledgments: [UUID: (packet: RelayPacket, hash: Data)] = [:]
     private var peers: [Slot: Peer] = [:]
-    private var flushing = false
+    private var flushingGeneration: UInt64?
     private var flushAgain = false
     private struct Slot: Hashable { let link: Int; let id: String }
     private final class Peer {
@@ -51,7 +54,7 @@ public enum NodeEvent: Equatable, Sendable {
             link.onMessage = { [weak self] bytes, id in self?.receive(bytes, from: Slot(link: index, id: id)) }
             link.onDisconnected = { [weak self] id in
                 guard let self else { return }
-                self.peers.removeValue(forKey: Slot(link: index, id: id)); self.publishPeers()
+                if self.peers.removeValue(forKey: Slot(link: index, id: id)) != nil { self.publishPeers() }
             }
         }
     }
@@ -59,27 +62,42 @@ public enum NodeEvent: Equatable, Sendable {
 
     /// Starts links and foreign relay forwarding. Restored outbox messages remain paused.
     public func start() {
+        if stopping { restartRequested = true; return }
         guard !running else { return }
-        running = true
+        running = true; generation &+= 1
+        let epoch = generation
         for link in links {
             // Native adapter callbacks can synchronously ask the host to stop.
             // Do not start another radio or a retry task after that explicit stop.
-            guard running else { return }
+            guard isCurrent(epoch) else { return }
             link.start(nodeName: identity.publicIdentity.id)
         }
-        guard running else { return }
+        guard isCurrent(epoch) else { return }
         timer = Task { [weak self] in
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(1)) } catch { return }
-                self?.tick()
+                guard let self, self.isCurrent(epoch) else { return }
+                self.tick()
             }
         }
         flush()
     }
     /// Already transmitted packets cannot be recalled. Original immutable records remain saved.
     public func stop() {
-        running = false; timer?.cancel(); timer = nil
-        active.removeAll(); origins.removeAll(); acknowledgments.removeAll(); peers.removeAll()
+        // Repeated stop callbacks must neither recurse nor invalidate an ongoing stop.
+        restartRequested = false
+        active.removeAll(); origins.removeAll(); acknowledgments.removeAll()
+        guard !stopping else { return }
+        guard running else {
+            return
+        }
+        running = false; generation &+= 1; timer?.cancel(); timer = nil
+        stopping = true
+        defer {
+            stopping = false
+            if restartRequested { restartRequested = false; start() }
+        }
+        peers.removeAll()
         for link in links { link.stop() }
         publishPeers()
     }
@@ -95,7 +113,7 @@ public enum NodeEvent: Equatable, Sendable {
             // different immutable message for the same caller-supplied ID.
             guard saved.recipient == recipient, saved.priority == priority,
                   saved.message.senderID == identity.publicIdentity.id,
-                  saved.message.channel == channel, saved.message.payload == payload else {
+                  saved.message.channel.utf8.elementsEqual(channel.utf8), saved.message.payload == payload else {
                 throw PechPechError.messageConflict
             }
             message = saved.message
@@ -131,22 +149,31 @@ public enum NodeEvent: Equatable, Sendable {
     /// Also useful to drive deterministic test adapters; normal foreground retries run each second.
     public func tick() {
         guard running else { return }
-        for (slot, peer) in peers {
+        let epoch = generation
+        for (slot, peer) in Array(peers) {
+            guard isCurrent(epoch) else { return }
+            guard peers[slot] === peer else { continue }
             peer.sent.removeAll(); peer.sourcePackets.removeAll()
             // One side may be ready while its last echo was dropped. Continue
             // periodic echoes on ready links so the other side can recover.
             sendHello(to: slot)
         }
+        guard isCurrent(epoch) else { return }
         flush()
     }
 
+    private func isCurrent(_ epoch: UInt64) -> Bool { running && generation == epoch }
+    private func peer(for slot: Slot) -> Peer? {
+        if let existing = peers[slot] { return existing }
+        guard peers.keys.filter({ $0.link == slot.link }).count < 4 else { return nil }
+        let peer = Peer(); peers[slot] = peer; return peer
+    }
     private func linkReady(_ slot: Slot) {
-        guard running else { return }
-        if peers[slot] == nil { peers[slot] = Peer() }
+        guard running, peer(for: slot) != nil else { return }
         sendHello(to: slot)
     }
     private func sendHello(to slot: Slot) {
-        guard let peer = peers[slot] else { return }
+        guard running, let peer = peers[slot] else { return }
         do {
             let hello = try SignedHello(identity: identity, challenge: peer.challenge, echo: peer.remoteChallenge)
             let previousEcho = peer.echoed
@@ -157,12 +184,13 @@ public enum NodeEvent: Equatable, Sendable {
     }
     private func receive(_ bytes: Data, from slot: Slot) {
         guard running, bytes.count <= RelayPacket.maximumBytes else { return }
+        let epoch = generation
         do {
             let frame = try WireCoding.decode(MeshFrame.self, from: bytes)
             if case .hello(let hello) = frame {
                 try hello.validate()
-                if peers[slot] == nil { peers[slot] = Peer() }
-                guard let peer = peers[slot], hello.claims.identity.id != identity.publicIdentity.id else { throw PechPechError.identityConflict }
+                guard let peer = peer(for: slot) else { return }
+                guard hello.claims.identity.id != identity.publicIdentity.id else { throw PechPechError.identityConflict }
                 if let old = peer.remoteIdentity, old != hello.claims.identity { throw PechPechError.identityConflict }
                 // Identity stays bound to a link until disconnect; fresh local challenge
                 // echo proves possession instead of trusting a replayed advertisement.
@@ -175,10 +203,12 @@ public enum NodeEvent: Equatable, Sendable {
                     }
                     let wasReady = peer.ready; peer.ready = true
                     links[slot.link].confirmPeer(slot.id)
+                    guard isCurrent(epoch), peers[slot] === peer else { return }
                     if !wasReady { publishPeers() }
+                    guard isCurrent(epoch), peers[slot] === peer else { return }
                 }
                 if peer.echoed != hello.claims.challenge { sendHello(to: slot) }
-                if peer.ready { flush() }
+                if isCurrent(epoch), peers[slot] === peer, peer.ready { flush() }
                 return
             }
             guard let peer = peers[slot], peer.ready, let neighbor = peer.remoteIdentity else { throw PechPechError.authenticationFailed }
@@ -193,30 +223,32 @@ public enum NodeEvent: Equatable, Sendable {
             case .packet(let packet):
                 try packet.validate()
                 if packet.destinationID == identity.publicIdentity.id {
-                    try receiveEndpoint(packet)
+                    try receiveEndpoint(packet, epoch: epoch)
                 } else {
                     guard packet.hopsRemaining > 0, packet.originID != identity.publicIdentity.id else { return }
                     _ = try store.enqueueRelay(packet)
                     peer.sourcePackets.insert(packet.id)
                 }
+                guard isCurrent(epoch), peers[slot] === peer else { return }
                 // This ACK is issued only after durable admission or endpoint persistence.
                 if let echo = peer.remoteChallenge {
                     let ack = try SignedRelayAck(identity: identity, packet: packet, echo: echo)
                     _ = send(.stored(ack), to: slot, priority: .receipt)
                 }
-                flush()
+                if isCurrent(epoch) { flush() }
             }
         } catch PechPechError.spoolFull { onEvent?(.relayBackpressure) }
         catch { report(error) }
     }
 
-    private func receiveEndpoint(_ packet: RelayPacket) throws {
+    private func receiveEndpoint(_ packet: RelayPacket, epoch: UInt64) throws {
         let opened = try EndpointCrypto.open(packet, for: identity)
         switch opened.envelope {
         case .message(let message):
             try message.validate()
             guard message.senderID == opened.sender.id, message.destinationID == identity.publicIdentity.id,
                   authorize(message, opened.sender) else { throw PechPechError.authenticationFailed }
+            guard isCurrent(epoch) else { return }
             let previous = try store.received(messageID: message.id)
             _ = try store.accept(message, sender: opened.sender) { receipt in
                 try EndpointCrypto.seal(.receipt(receipt), from: identity, to: opened.sender,
@@ -249,17 +281,22 @@ public enum NodeEvent: Equatable, Sendable {
 
     private func flush() {
         guard running else { return }
-        if flushing { flushAgain = true; return }
-        flushing = true
-        defer { flushing = false }
+        let epoch = generation
+        if flushingGeneration == epoch { flushAgain = true; return }
+        flushingGeneration = epoch
+        defer { if flushingGeneration == epoch { flushingGeneration = nil } }
         // Reentrant in-memory links can deliver and ACK synchronously; a bounded
         // second pass consumes any receipt newly committed by those callbacks.
         var passes = 0
         repeat {
             flushAgain = false; passes += 1
             do {
-                for packet in try store.outgoingReceipts() { forward(packet) }
+                for packet in try store.outgoingReceipts() {
+                    guard isCurrent(epoch) else { return }
+                    forward(packet)
+                }
                 for pending in try store.pending() where active.contains(pending.message.id) {
+                    guard isCurrent(epoch) else { return }
                     let message = pending.message
                     if origins[message.id]?.expiresAt ?? 0 <= WireCoding.now + 5_000 {
                         origins[message.id] = try EndpointCrypto.seal(.message(message), from: identity,
@@ -267,14 +304,20 @@ public enum NodeEvent: Equatable, Sendable {
                     }
                     if connectedIdentities.isEmpty { onEvent?(.waitingForRoute(message.id)) }
                     else { onEvent?(.transmitting(message.id)) }
-                    if let packet = origins[message.id] { forward(packet) }
+                    guard isCurrent(epoch) else { return }
+                    guard active.contains(message.id) else { continue }
+                    if let packet = origins[message.id] { forward(packet, ownedMessageID: message.id) }
                 }
-                for packet in try store.relayPackets() { forward(packet, foreign: true) }
+                for packet in try store.relayPackets() {
+                    guard isCurrent(epoch) else { return }
+                    forward(packet, foreign: true)
+                }
             } catch { report(error) }
-        } while flushAgain && passes < 2
+        } while isCurrent(epoch) && flushAgain && passes < 2
     }
-    private func forward(_ packet: RelayPacket, foreign: Bool = false) {
+    private func forward(_ packet: RelayPacket, foreign: Bool = false, ownedMessageID: UUID? = nil) {
         guard running else { return }
+        let epoch = generation
         // Snapshot slots, since test adapters may disconnect synchronously in send.
         let destinations = peers.keys.sorted { a, b in
             let aDirect = peers[a]?.remoteIdentity?.id == packet.destinationID
@@ -283,6 +326,8 @@ public enum NodeEvent: Equatable, Sendable {
             return a.link == b.link ? a.id < b.id : a.link < b.link
         }
         for slot in destinations {
+            guard isCurrent(epoch) else { return }
+            if let ownedMessageID, !active.contains(ownedMessageID) { return }
             guard let peer = peers[slot], peer.ready, let neighbor = peer.remoteIdentity,
                   neighbor.id != packet.originID, peer.sent[packet.id] == nil,
                   !peer.sourcePackets.contains(packet.id) else { continue }
@@ -295,6 +340,7 @@ public enum NodeEvent: Equatable, Sendable {
         }
     }
     @discardableResult private func send(_ frame: MeshFrame, to slot: Slot, priority: PacketPriority) -> Bool {
+        guard running, peers[slot] != nil else { return false }
         do {
             let bytes = try WireCoding.encode(frame)
             guard bytes.count <= RelayPacket.maximumBytes else { throw PechPechError.frameTooLarge(bytes.count) }

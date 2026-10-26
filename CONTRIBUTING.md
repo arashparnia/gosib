@@ -36,7 +36,7 @@ The demo uses synthetic data and injected links. It does not establish Bluetooth
 
 Open an issue for a substantial wire-format, cryptography, routing or persistence change before building it. Explain the concrete behavior you want and how peers using an older version should behave. Small fixes can go directly to a pull request.
 
-The current experimental release is 0.3.0. The generic `MeshNode` protocol retains wire version 2 and the 0.2 storage namespace. Those namespaces are incompatible with 0.1. Read [the migration guide](docs/migration-0.2.md) before adapting an existing host, database or interoperability implementation. Host-managed encrypted protocol profiles are a separate integration boundary; do not treat their link authentication as application authorization.
+The current experimental release is 0.3.1. The generic `MeshNode` protocol retains wire version 2 and the 0.2 storage namespace. Those namespaces are incompatible with 0.1. Read [the migration guide](docs/migration-0.2.md) before adapting an existing host, database or interoperability implementation. Host-managed encrypted protocol profiles are a separate integration boundary; do not treat their link authentication as application authorization.
 
 Keep transport adapters independent of application models. Examples may illustrate a use case; core code must not assume restaurants, orders, chat rooms, purchases or a particular business authority.
 

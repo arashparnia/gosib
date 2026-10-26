@@ -170,6 +170,25 @@ final class CryptoAndModelTests: XCTestCase {
         XCTAssertThrowsError(try WireCoding.decode(EndpointEnvelope.self, from: Data("{\"kind\":\"unrecognized\"}".utf8)))
     }
 
+    func testMessageEqualityPreservesUnicodeEncodingAndAuthenticatedHash() throws {
+        let sender = try identity(1), receiver = try identity(3)
+        let composed = "caf\u{00e9}", decomposed = "cafe\u{0301}"
+        XCTAssertEqual(composed, decomposed, "Swift's linguistic equality must not define immutable message bytes")
+        let original = try Message(senderID: sender.publicIdentity.id, destinationID: receiver.publicIdentity.id,
+                                   channel: composed, payload: Data([1]), createdAt: now)
+        let changed = try Message(id: original.id, senderID: original.senderID, destinationID: original.destinationID,
+                                  channel: decomposed, payload: original.payload, createdAt: original.createdAt)
+        XCTAssertNotEqual(original, changed)
+        XCTAssertNotEqual(try original.bodyHash, try changed.bodyHash)
+        for message in [original, changed] {
+            let decoded = try WireCoding.decode(Message.self, from: WireCoding.encode(message))
+            XCTAssertEqual(decoded, message)
+            XCTAssertTrue(decoded.channel.utf8.elementsEqual(message.channel.utf8))
+            let packet = try EndpointCrypto.seal(.message(message), from: sender, to: receiver.publicIdentity, now: now)
+            XCTAssertEqual(try EndpointCrypto.open(packet, for: receiver, now: now).envelope, .message(message))
+        }
+    }
+
     func testCanonicalInteropVector() throws {
         let vectorURL = try XCTUnwrap(Bundle.module.url(forResource: "canonical-v2", withExtension: "json", subdirectory: "Fixtures"))
         let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: vectorURL)) as? [String: String])
@@ -197,5 +216,23 @@ final class CryptoAndModelTests: XCTestCase {
         XCTAssertEqual(key.withUnsafeBytes { Data($0).base64EncodedString() }, fixture["derivedKeyBase64"])
         XCTAssertEqual(EndpointCrypto.keyDerivationDomain, fixture["keyDerivationDomain"])
         XCTAssertEqual(EndpointCrypto.keyDerivationDomain, "PECHPECH-2-X25519-HKDF-SHA256-AES256GCM-Ed25519")
+    }
+
+    func testUnicodeImmutableMessageInteropVector() throws {
+        let vectorURL = try XCTUnwrap(Bundle.module.url(forResource: "unicode-v2", withExtension: "json", subdirectory: "Fixtures"))
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: vectorURL)) as? [String: String])
+        let sender = try identity(1), receiver = try identity(3)
+        XCTAssertEqual(sender.publicIdentity.id, fixture["senderAddress"])
+        XCTAssertEqual(receiver.publicIdentity.id, fixture["receiverAddress"])
+        let id = try XCTUnwrap(UUID(uuidString: try XCTUnwrap(fixture["messageID"])))
+        for (name, channel) in [("composed", "caf\u{00e9}"), ("decomposed", "cafe\u{0301}")] {
+            let message = try Message(id: id, senderID: sender.publicIdentity.id, destinationID: receiver.publicIdentity.id,
+                                      channel: channel, payload: Data([1]), createdAt: now)
+            XCTAssertEqual(channel.utf8.map { String(format: "%02x", $0) }.joined(), fixture[name + "ChannelUTF8Hex"])
+            // Compare bytes: normal Swift String equality folds Unicode normalization.
+            XCTAssertEqual(try WireCoding.encode(message), Data(try XCTUnwrap(fixture[name + "MessageJSON"]).utf8))
+            XCTAssertEqual(try message.bodyHash.base64EncodedString(), fixture[name + "MessageHashBase64"])
+        }
+        XCTAssertNotEqual(fixture["composedMessageHashBase64"], fixture["decomposedMessageHashBase64"])
     }
 }

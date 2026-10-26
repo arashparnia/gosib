@@ -2,7 +2,7 @@
 
 PechPech 0.3 is experimental. The repository separates deterministic software checks from deployment claims that require real devices.
 
-[The current 0.3 record](verification-0.3-2026-10-04.md) separates SDK and packaging checks from host deployment qualification. [The 4 October 0.2 record](verification-2026-10-04.md) retains the earlier source and version-2 interoperability results. [The historical 3 October record](verification-2026-10-03.md) applies to the prior 0.1 revision; it does not qualify current names or wire bytes. See [compatibility and migration](migration-0.2.md) before an upgrade.
+[The current 0.3.1 record](verification-0.3.1-2026-10-26.md) separates SDK and packaging checks from host deployment qualification. [The initial 0.3 record](verification-0.3-2026-10-04.md) retains the prior release evidence. [The 4 October 0.2 record](verification-2026-10-04.md) retains the earlier source and version-2 interoperability results. [The historical 3 October record](verification-2026-10-03.md) applies to the prior 0.1 revision; it does not qualify current names or wire bytes. See [compatibility and migration](migration-0.2.md) before an upgrade.
 
 ## Software checks
 

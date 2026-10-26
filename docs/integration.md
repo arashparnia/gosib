@@ -4,7 +4,7 @@ The first package supports native iOS 16+ and macOS 13+ applications using Swift
 
 Both library products include SwiftPM resource bundles with a privacy manifest and full MIT notice. Retain them in the distributed host and review the app's own data disclosures; see [packaging and privacy](packaging.md).
 
-These generic-node instructions target PechPech 0.3.0 and wire version 2, with the same storage namespace as 0.2. The prior 0.1 release is incompatible. Choose a dedicated current-release database or complete a reviewed migration using [the upgrade guide](migration-0.2.md); preserve unresolved records and private identities.
+These generic-node instructions target PechPech 0.3.1 and wire version 2, with the same storage namespace as 0.2. The prior 0.1 release is incompatible. Choose a dedicated current-release database or complete a reviewed migration using [the upgrade guide](migration-0.2.md); preserve unresolved records and private identities.
 
 If the host already owns an encrypted envelope, persistent keys and durable message/business ledgers, consider the separate [opaque profile integration](opaque-profiles.md). `OpaquePacketRouter` shares native transport and neighbor authentication while preserving host-owned bytes and persistence; it does not automatically convert data to the generic `MeshStore` or receipt model.
 

@@ -93,6 +93,15 @@ public struct Message: Codable, Equatable, Sendable, Identifiable {
             throw PechPechError.invalid("Invalid message address, channel, time or payload size.")
         }
     }
+    /// Immutable contents use their original UTF-8 bytes. Swift's normal String
+    /// equality considers different Unicode normalizations equivalent, but those
+    /// encodings have different authenticated message hashes on this protocol.
+    public static func == (lhs: Message, rhs: Message) -> Bool {
+        lhs.id == rhs.id && lhs.senderID.utf8.elementsEqual(rhs.senderID.utf8) &&
+            lhs.destinationID.utf8.elementsEqual(rhs.destinationID.utf8) &&
+            lhs.channel.utf8.elementsEqual(rhs.channel.utf8) && lhs.payload == rhs.payload &&
+            lhs.createdAt == rhs.createdAt
+    }
     public var bodyHash: Data { get throws { WireCoding.hash(try WireCoding.encode(self)) } }
 }
 
@@ -178,7 +187,10 @@ public struct RelayPacket: Codable, Equatable, Sendable, Identifiable {
         // Subtraction is checked so hostile Int64 extremes cannot crash the decoder.
         let lifetime = expiresAt.subtractingReportingOverflow(now)
         guard !lifetime.overflow, lifetime.partialValue > 0, lifetime.partialValue <= 600_000 else { throw PechPechError.expired }
-        guard try WireCoding.encode(self).count <= Self.maximumBytes else { throw PechPechError.frameTooLarge(try WireCoding.encode(self).count) }
+        // Packet admission must include the link-frame wrapper. A bare packet
+        // can fit this bound while every native adapter rejects its actual frame.
+        let frameBytes = try WireCoding.encode(MeshFrame.packet(self)).count
+        guard frameBytes <= Self.maximumBytes else { throw PechPechError.frameTooLarge(frameBytes) }
     }
     public func forwarded() -> RelayPacket? {
         guard hopsRemaining > 0 else { return nil }

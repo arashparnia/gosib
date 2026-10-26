@@ -8,7 +8,7 @@ PechPech is an open-source Swift SDK for encrypted, offline, store-and-forward m
 
 Developed from GARVI's restaurant communication work, PechPech separates the reusable mechanism from restaurant orders, menus, accounts, and screens. You can build your own payloads and application rules on top of it.
 
-**Status: experimental 0.3.0.** Native iPhone, iPad, and Mac hosts are supported at the source level. Physical radio deployment, latency, and background operation remain unqualified. A usable radio path and OS permissions are required. Android and browser implementations are future work.
+**Status: experimental 0.3.1.** Native iPhone, iPad, and Mac hosts are supported at the source level. Physical radio deployment, latency, and background operation remain unqualified. A usable radio path and OS permissions are required. Android and browser implementations are future work.
 
 ## What is included
 
@@ -42,7 +42,7 @@ With Node 22+, `node scripts/check-interop-vector.cjs` independently verifies th
 Add the package in Xcode or in your package manifest:
 
 ```swift
-.package(url: "https://github.com/arashparnia/pechpech.git", .upToNextMinor(from: "0.3.0"))
+.package(url: "https://github.com/arashparnia/pechpech.git", .upToNextMinor(from: "0.3.1"))
 ```
 
 Depend on `.product(name: "PechPechCore", package: "pechpech")` and, for native links, `.product(name: "PechPechApple", package: "pechpech")`.
@@ -96,7 +96,7 @@ Retries use the saved immutable record: `try node.resume(message.id)`. `node.pau
 - [Integration](docs/integration.md): identity storage, enrollment, lifecycle, permissions, and custom transports.
 - [Packaging and privacy](docs/packaging.md): SwiftPM products, bundled notices/manifests, and independent consumer checks.
 - [Qualification](docs/qualification.md): software evidence and the physical-device matrix still required.
-- [Current verification record](docs/verification-0.3-2026-10-04.md): checks completed for this release and their limits.
+- [Current verification record](docs/verification-0.3.1-2026-10-26.md): checks completed for this release and their limits.
 - [0.2 verification record](docs/verification-2026-10-04.md): retained evidence for the prior release.
 - [Upgrade guide](docs/migration-0.2.md): module, wire, storage, and version boundaries.
 

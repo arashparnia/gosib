@@ -116,6 +116,8 @@ public struct SignedOpaqueAck: Codable, Equatable, Sendable {
     private let receiveEndpoint: (OpaquePacket) async throws -> Void
     private var timer: Task<Void, Never>?
     private var running = false
+    private var stopping = false
+    private var restartRequested = false
     private var generation: UInt64 = 0
     private var peers: [Slot: Peer] = [:]
     private var incoming = Set<UUID>()
@@ -185,6 +187,7 @@ public struct SignedOpaqueAck: Codable, Equatable, Sendable {
         return Dictionary(uniqueKeysWithValues: sorted.prefix(32).map { ($0.key, $0.value) })
     }
     public func start() {
+        if stopping { restartRequested = true; return }
         guard !running else { return }
         running = true; generation &+= 1
         let epoch = generation
@@ -207,8 +210,16 @@ public struct SignedOpaqueAck: Codable, Equatable, Sendable {
     }
     /// Stops new sends. Host operations already awaiting durable completion cannot be recalled.
     public func stop() {
+        if stopping { restartRequested = false; return }
+        guard running else { return }
         running = false; generation &+= 1; timer?.cancel(); timer = nil
+        stopping = true
+        defer {
+            stopping = false
+            if restartRequested { restartRequested = false; start() }
+        }
         peers.removeAll(); incoming.removeAll(); removing.removeAll()
+        // Finish tearing down every adapter before honoring a callback's restart.
         for link in links { link.stop() }
         publishTopology()
     }
@@ -235,12 +246,17 @@ public struct SignedOpaqueAck: Codable, Equatable, Sendable {
     /// before durable admission and are not decremented again during retries.
     public func tick() async {
         guard running else { return }
+        let epoch = generation
         for (slot, peer) in peers {
+            guard isCurrent(epoch) else { return }
+            guard peers[slot] === peer else { continue }
             peer.sent.removeAll(); peer.sourcePackets.removeAll()
             if peer.ready && peer.lastHello.duration(to: .now) > .seconds(15) { peer.ready = false }
             sendHello(to: slot)
         }
+        guard isCurrent(epoch) else { return }
         publishTopology()
+        guard isCurrent(epoch) else { return }
         await flush()
     }
     public func flush() async {
@@ -282,16 +298,18 @@ public struct SignedOpaqueAck: Codable, Equatable, Sendable {
     }
     private func sendHello(to slot: Slot) {
         guard running, let peer = peers[slot] else { return }
+        let epoch = generation
         do {
             let hello = try SignedOpaqueHello(identity: identity, profile: profile, challenge: peer.challenge,
                                                echo: peer.remoteChallenge, routes: routes)
             let previous = peer.echoed; peer.echoed = peer.remoteChallenge
-            if !send(try WireCoding.encode(hello), to: slot, priority: 3) { peer.echoed = previous }
-        } catch { report(error) }
+            if !send(try WireCoding.encode(hello), to: slot, priority: 3, epoch: epoch) { peer.echoed = previous }
+        } catch { if isCurrent(epoch) { report(error) } }
     }
     private func receive(_ bytes: Data, from slot: Slot) {
         guard running, !bytes.isEmpty, bytes.count <= RelayPacket.maximumBytes,
               let peer = peer(for: slot), takeToken(peer) else { return }
+        let epoch = generation
         do {
             if let hello = try? WireCoding.decode(SignedOpaqueHello.self, from: bytes) {
                 try hello.validate(profile: profile)
@@ -306,12 +324,15 @@ public struct SignedOpaqueAck: Codable, Equatable, Sendable {
                     }
                     let wasReady = peer.ready; peer.ready = true
                     links[slot.link].confirmPeer(slot.id)
+                    guard isCurrent(epoch), peers[slot] === peer else { return }
                     if !wasReady { publishTopology() }
+                    guard isCurrent(epoch), peers[slot] === peer else { return }
                 }
                 if peer.echoed != hello.claims.challenge { sendHello(to: slot) }
+                guard isCurrent(epoch), peers[slot] === peer else { return }
                 if peer.ready {
                     publishTopology()
-                    let epoch = generation
+                    guard isCurrent(epoch), peers[slot] === peer else { return }
                     Task { [weak self] in
                         guard let self, self.isCurrent(epoch) else { return }
                         await self.flush()
@@ -325,7 +346,6 @@ public struct SignedOpaqueAck: Codable, Equatable, Sendable {
                 guard peer.sent[ack.claims.packetID] == ack.claims.immutableHash else { throw PechPechError.authenticationFailed }
                 guard !removing.contains(ack.claims.packetID), removing.count < 64 else { return }
                 removing.insert(ack.claims.packetID)
-                let epoch = generation
                 Task { [weak self] in
                     guard let self else { return }
                     defer { if self.generation == epoch { self.removing.remove(ack.claims.packetID) } }
@@ -336,13 +356,16 @@ public struct SignedOpaqueAck: Codable, Equatable, Sendable {
                 return
             }
             let packet = try decode(bytes)
+            guard isCurrent(epoch), peers[slot] === peer, peer.ready else { return }
+            guard packet.bytes == bytes else {
+                throw PechPechError.invalid("The host decoder changed the original packet bytes.")
+            }
             try packet.validate()
             guard !incoming.contains(packet.id), incoming.count < 64 else { return }
             if packet.destinationID != identity.publicIdentity.id {
                 guard packet.hopsRemaining > 0, packet.originID != identity.publicIdentity.id else { return }
             }
             incoming.insert(packet.id)
-            let epoch = generation
             Task { [weak self] in
                 guard let self else { return }
                 defer { if self.generation == epoch { self.incoming.remove(packet.id) } }
@@ -354,6 +377,7 @@ public struct SignedOpaqueAck: Codable, Equatable, Sendable {
                         try await self.receiveEndpoint(packet); saved = nil
                     } else {
                         let next = try self.forwarded(packet)
+                        guard self.isCurrent(epoch), self.peers[slot] === peer, peer.ready else { return }
                         guard next.id == packet.id, next.destinationID == packet.destinationID, next.originID == packet.originID,
                               next.priority == packet.priority, next.expiresAt == packet.expiresAt,
                               next.immutableHash == packet.immutableHash, next.hopsRemaining == packet.hopsRemaining - 1 else {
@@ -368,16 +392,19 @@ public struct SignedOpaqueAck: Codable, Equatable, Sendable {
                     if peer.sourcePackets.count > Self.maximumPendingPerPass { peer.sourcePackets.removeAll() }
                     if let echo = peer.remoteChallenge {
                         let ack = try SignedOpaqueAck(identity: self.identity, profile: self.profile, packet: packet, echo: echo)
-                        _ = self.send(try WireCoding.encode(ack), to: slot, priority: 3)
+                        _ = self.send(try WireCoding.encode(ack), to: slot, priority: 3, epoch: epoch)
                     }
+                    guard self.isCurrent(epoch) else { return }
                     if let saved { self.forward(saved, excluding: slot) }
+                    guard self.isCurrent(epoch) else { return }
                     await self.flush()
                 } catch { if self.isCurrent(epoch) { self.report(error) } }
             }
-        } catch { report(error) }
+        } catch { if isCurrent(epoch) { report(error) } }
     }
     private func forward(_ packet: OpaquePacket, excluding source: Slot? = nil) {
         guard running else { return }
+        let epoch = generation
         let destinations = peers.keys.sorted { a, b in
             let aDirect = peers[a]?.remoteIdentity?.id == packet.destinationID
             let bDirect = peers[b]?.remoteIdentity?.id == packet.destinationID
@@ -388,16 +415,17 @@ public struct SignedOpaqueAck: Codable, Equatable, Sendable {
             return a.link == b.link ? a.id < b.id : a.link < b.link
         }
         for slot in destinations {
-            guard running, slot != source, let peer = peers[slot], peer.ready, let neighbor = peer.remoteIdentity,
+            guard isCurrent(epoch) else { return }
+            guard slot != source, let peer = peers[slot], peer.ready, let neighbor = peer.remoteIdentity,
                   neighbor.id != packet.originID, peer.sent[packet.id] == nil,
                   !peer.sourcePackets.contains(packet.id), peer.sent.count < Self.maximumPendingPerPass else { continue }
             // Set before synchronous custom-adapter reentrancy, roll back on local backpressure.
             peer.sent[packet.id] = packet.immutableHash
-            if !send(packet.bytes, to: slot, priority: packet.priority) { peer.sent.removeValue(forKey: packet.id) }
+            if !send(packet.bytes, to: slot, priority: packet.priority, epoch: epoch) { peer.sent.removeValue(forKey: packet.id) }
         }
     }
-    private func send(_ bytes: Data, to slot: Slot, priority: Int) -> Bool {
-        guard running, !bytes.isEmpty, bytes.count <= RelayPacket.maximumBytes else { return false }
+    private func send(_ bytes: Data, to slot: Slot, priority: Int, epoch: UInt64) -> Bool {
+        guard isCurrent(epoch), !bytes.isEmpty, bytes.count <= RelayPacket.maximumBytes else { return false }
         return links[slot.link].send(bytes, to: slot.id, priority: priority)
     }
     private func takeToken(_ peer: Peer) -> Bool {
@@ -407,7 +435,12 @@ public struct SignedOpaqueAck: Codable, Equatable, Sendable {
         guard peer.tokens >= 1 else { return false }
         peer.tokens -= 1; return true
     }
-    private func publishTopology() { onNeighbors?(connectedIdentities); onRoutes?(routes) }
+    private func publishTopology() {
+        let epoch = generation
+        onNeighbors?(connectedIdentities)
+        guard generation == epoch else { return }
+        onRoutes?(routes)
+    }
     private func report(_ error: Error) {
         if let error = error as? PechPechError, error == .spoolFull { onEvent?(.relayBackpressure) }
         else { onEvent?(.error(error.localizedDescription)) }

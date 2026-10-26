@@ -22,6 +22,48 @@ final class TCPFramingTests: XCTestCase {
         }
     }
 
+    func testKnownDiscoveriesFillFreedSlotsWithoutAnotherDiscoveryEvent() {
+        let known: Set<String> = ["peer-a", "peer-b", "peer-c", "peer-d", "peer-e", "peer-f"]
+        var connected: Set<String> = ["peer-a", "peer-b", "peer-c", "incoming-1"]
+        XCTAssertTrue(TCPConnectionCandidates.select(known: known, connected: connected, retrying: []).isEmpty)
+
+        // An incoming connection ends without changing the Bonjour result set.
+        connected.remove("incoming-1")
+        XCTAssertEqual(TCPConnectionCandidates.select(known: known, connected: connected, retrying: []), ["peer-d"])
+
+        // A failed outgoing peer waits for its backoff; another known peer can fill its slot.
+        connected.remove("peer-a")
+        XCTAssertEqual(TCPConnectionCandidates.select(known: known, connected: connected, retrying: ["peer-a"]),
+                       ["peer-d", "peer-e"])
+    }
+
+    func testRetryThatExpiresWhileFullRemainsEligibleForLaterSlot() {
+        let known: Set<String> = ["peer-a", "peer-b", "peer-c", "peer-d", "peer-e"]
+        var connected: Set<String> = ["peer-b", "peer-c", "peer-d", "peer-e"]
+        XCTAssertTrue(TCPConnectionCandidates.select(known: known, connected: connected, retrying: ["peer-a"]).isEmpty)
+        // Removing the expired backoff does not create a fifth connection.
+        XCTAssertTrue(TCPConnectionCandidates.select(known: known, connected: connected, retrying: []).isEmpty)
+        connected.remove("peer-e")
+        XCTAssertEqual(TCPConnectionCandidates.select(known: known, connected: connected, retrying: []), ["peer-a"])
+    }
+
+    #if canImport(Network)
+    @MainActor func testStopFromInitialPeerNotificationCancelsStartBeforeNativeLinks() {
+        let link = TCPPacketLink()
+        defer { link.onPeers = nil; link.stop() }
+        var notifications = 0
+        link.onPeers = { _ in
+            notifications += 1
+            link.stop()
+        }
+        link.start(nodeName: "synthetic-lifecycle-test")
+        XCTAssertEqual(notifications, 1)
+        XCTAssertFalse(link.running, "An explicit stop during startup must prevent the listener and browser from starting.")
+        link.stop()
+        XCTAssertEqual(notifications, 1, "An already stopped adapter must not recursively announce another stop.")
+    }
+    #endif
+
     #if canImport(CryptoKit)
     func testDiscoveryNamesAreBoundedDeterministicAndDoNotCollapseCommonPrefixes() {
         let first = DiscoveryName.make(from: "my-app-instance-alpha")

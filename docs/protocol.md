@@ -30,6 +30,8 @@ Passing a static vector is a useful interoperability check, not proof of a compl
 
 `Message` contains `id`, `senderID`, `destinationID`, `channel`, `payload` and `createdAt`. Its body hash is SHA-256 of the complete canonical message encoding, including its immutable identity, addresses, channel and creation time. A channel is 1–128 UTF-8 bytes; payload is at most 4,096 bytes. The host defines payload semantics.
 
+Immutable-content comparisons preserve exact UTF-8. For example, a channel containing composed `é` and one containing `e` followed by a combining acute accent are different protocol contents, even when Swift's linguistic string equality considers them equivalent. Reusing an ID with those changed bytes is a conflict. The synthetic [immutable UTF-8 fixture](../Tests/PechPechCoreTests/Fixtures/unicode-v2.json) publishes both canonical message encodings and hashes; Swift and the independent Node/OpenSSL checker verify them. Version 0.3.1 tightens this validation without changing wire bytes.
+
 `EndpointEnvelope` has an explicit `kind` discriminator:
 
 | Kind | Fields | Meaning |
@@ -74,6 +76,8 @@ Retaining and retransmitting the same authenticated ciphertext is permitted. Nev
 
 `PacketPriority` is integer `0=bulk`, `1=normal`, `2=urgent`, `3=receipt`. Resource priority does not prove that a packet is legitimate or grant sender authorization. Expiry uses wall-clock Unix time and therefore depends on device clock accuracy.
 
+Packet validation and relay admission enforce the 16,384-byte bound on the complete required `MeshFrame.packet` encoding, including its JSON wrapper. A bare relay packet fitting the limit is insufficient if its complete frame exceeds it.
+
 `EndpointCrypto.seal` defaults to a 60,000-millisecond packet lifetime. Validation requires a positive remaining lifetime no greater than 600,000 milliseconds at the receiving device's clock. Clock skew can therefore reject otherwise authentic packets; account for this in offline deployment testing.
 
 The original message's durability is separate from packet lifetime. An expired transport packet does not erase an owned message; recovery can create a fresh packet for the same immutable message.
@@ -95,6 +99,8 @@ A `stored` acknowledgment follows durable relay admission or endpoint persistenc
 `MeshNode` uses bounded opportunistic forwarding: prefer a directly connected destination, then try other authenticated neighbors, avoiding the immediate source and original sender. It decrements the hop budget when forwarding foreign packets. There is no topology consensus or proof that a visible neighbor can reach the final recipient.
 
 While running, one-second ticks retry outstanding work and send signed hello/echo frames even on locally ready links. This lets the other side recover a lost final echo without replacing the link's challenges. Failed local queue admission does not advance the node's echoed-challenge marker. Unchanged owned packets reuse their current packet identity/ciphertext; a fresh packet is sealed near expiry. The `transmitting` event means attempts can use a local neighbor, not that a usable end-to-end route or receipt exists. `waitingForRoute` means no authenticated neighbor is currently available.
+
+Custom adapters are also limited to four tracked transport handles per adapter, including incomplete handshakes. A disconnect releases its handle. Synchronous host and adapter callbacks may pause or stop a session; forwarding checks that intent before every new send. A restart requested during stop waits for all adapters to close, and a later stop cancels that request. Work from an earlier session cannot send through a replacement session.
 
 ## Receipt boundaries
 

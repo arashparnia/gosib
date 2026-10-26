@@ -30,10 +30,15 @@ private struct TestOpaqueWire: Codable, Equatable {
     var sent: [Data] = []
     var drop: ((Data) -> Bool)?
     var reject: ((Data) -> Bool)?
-    func start(nodeName: String) { name = nodeName; running = true; onState?("Started") }
+    var didStop: (() -> Void)?
+    var startCalls = 0
+    var stopCalls = 0
+    func start(nodeName: String) { startCalls += 1; name = nodeName; running = true; onState?("Started") }
     func stop() {
+        stopCalls += 1
         running = false
         for other in Array(peers.values) { disconnect(other) }
+        didStop?()
     }
     func confirmPeer(_ peerID: String) {}
     func send(_ data: Data, to peerID: String, priority: Int) -> Bool {
@@ -283,6 +288,111 @@ final class OpaqueRouterTests: XCTestCase {
         await settle()
         XCTAssertNil(hb.inbox[obsolete.id])
         XCTAssertFalse(lr.packets.contains { $0.id == obsolete.id })
+    }
+
+    @MainActor func testReentrantRestartDuringSendCannotContinueOriginInNewSession() async throws {
+        let origin = Identity(), first = Identity(), second = Identity(), destination = Identity()
+        let la = OpaqueTestLink(), l1 = OpaqueTestLink(), l2 = OpaqueTestLink()
+        let ha = OpaqueHost(), h1 = OpaqueHost(), h2 = OpaqueHost()
+        let sender = try router(origin, la, ha), r1 = try router(first, l1, h1), r2 = try router(second, l2, h2)
+        defer { sender.stop(); r1.stop(); r2.stop() }
+        sender.start(); r1.start(); r2.start(); la.connect(l1); la.connect(l2); await settle()
+        var restarted = false
+        la.reject = { bytes in
+            guard !restarted, (try? WireCoding.decode(TestOpaqueWire.self, from: bytes)) != nil else { return false }
+            restarted = true
+            sender.stop(); sender.start(); la.connect(l1); la.connect(l2)
+            return true
+        }
+        let original = try packet(origin, destination)
+        try await sender.sendOrigin(original); await settle()
+        XCTAssertTrue(restarted)
+        XCTAssertTrue(la.packets.isEmpty, "An obsolete forwarding loop must not continue over newly authenticated links.")
+        XCTAssertTrue(h1.pending.isEmpty); XCTAssertTrue(h2.pending.isEmpty)
+        try await sender.sendOrigin(original); await settle()
+        XCTAssertEqual(h1.pending[original.id]?.immutableHash, original.immutableHash)
+        XCTAssertEqual(h2.pending[original.id]?.immutableHash, original.immutableHash)
+    }
+
+    @MainActor func testForwardingCallbackRestartCannotBeginObsoleteHostWrite() async throws {
+        let origin = Identity(), relay = Identity(), endpoint = Identity(), la = OpaqueTestLink(), lr = OpaqueTestLink()
+        let ha = OpaqueHost(), hr = OpaqueHost(), sender = try router(origin, la, ha)
+        weak var middleReference: OpaquePacketRouter?
+        var restarted = false
+        let middle = try OpaquePacketRouter(identity: relay, profile: profile, links: [lr],
+            decode: { try WireCoding.decode(TestOpaqueWire.self, from: $0).descriptor() },
+            forwarded: { packet in
+                var wire = try WireCoding.decode(TestOpaqueWire.self, from: packet.bytes)
+                wire.hopsRemaining -= 1
+                let next = try wire.descriptor()
+                if !restarted {
+                    restarted = true; middleReference?.stop(); middleReference?.start()
+                }
+                return next
+            }, loadPending: { Array(hr.pending.values) }, persistRelay: { try hr.persist($0) },
+            removeRelay: { hr.pending.removeValue(forKey: $0) }, receiveEndpoint: { try await hr.accept($0) })
+        middleReference = middle
+        defer { sender.stop(); middle.stop() }
+        sender.start(); middle.start(); la.connect(lr); await settle()
+        try await sender.sendOrigin(packet(origin, endpoint)); await settle()
+        XCTAssertTrue(restarted)
+        XCTAssertEqual(hr.relayWrites, 0, "A host write that has not begun must respect a stop from the forwarding callback.")
+        XCTAssertTrue(hr.pending.isEmpty); XCTAssertTrue(lr.acknowledgments.isEmpty)
+    }
+
+    @MainActor func testStopIsIdempotentWhenTopologyCallbackStopsAgain() throws {
+        let node = try router(Identity(), OpaqueTestLink(), OpaqueHost())
+        var notifications = 0
+        node.onNeighbors = { _ in
+            notifications += 1
+            if notifications < 3 { node.stop() }
+        }
+        node.start(); node.stop()
+        XCTAssertEqual(notifications, 1)
+        node.stop()
+        XCTAssertEqual(notifications, 1)
+    }
+
+    @MainActor func testRestartFromAdapterStopWaitsForEveryAdapterToStop() throws {
+        let first = OpaqueTestLink(), second = OpaqueTestLink()
+        let node = try OpaquePacketRouter(identity: Identity(), profile: profile, links: [first, second],
+            decode: { _ in throw PechPechError.invalid("Unused.") }, forwarded: { $0 }, loadPending: { [] },
+            persistRelay: { _ in }, removeRelay: { _ in }, receiveEndpoint: { _ in })
+        defer { first.didStop = nil; node.stop() }
+        first.didStop = { node.start() }
+        node.start(); node.stop()
+        XCTAssertTrue(first.running); XCTAssertTrue(second.running)
+        XCTAssertEqual(first.startCalls, 2); XCTAssertEqual(second.startCalls, 2)
+        XCTAssertEqual(first.stopCalls, 1); XCTAssertEqual(second.stopCalls, 1)
+    }
+
+    @MainActor func testStopDuringAdapterTeardownCancelsDeferredRestart() throws {
+        let first = OpaqueTestLink(), second = OpaqueTestLink()
+        let node = try OpaquePacketRouter(identity: Identity(), profile: profile, links: [first, second],
+            decode: { _ in throw PechPechError.invalid("Unused.") }, forwarded: { $0 }, loadPending: { [] },
+            persistRelay: { _ in }, removeRelay: { _ in }, receiveEndpoint: { _ in })
+        defer { first.didStop = nil; node.stop() }
+        first.didStop = { node.start(); node.stop() }
+        node.start(); node.stop()
+        XCTAssertFalse(first.running); XCTAssertFalse(second.running)
+        XCTAssertEqual(first.startCalls, 1); XCTAssertEqual(second.startCalls, 1)
+        XCTAssertEqual(first.stopCalls, 1); XCTAssertEqual(second.stopCalls, 1)
+    }
+
+    @MainActor func testDecoderCannotSubstituteOriginalPacketBytes() async throws {
+        let origin = Identity(), endpoint = Identity(), la = OpaqueTestLink(), lb = OpaqueTestLink()
+        let ha = OpaqueHost(), hb = OpaqueHost(), sender = try router(origin, la, ha)
+        let receiver = try OpaquePacketRouter(identity: endpoint, profile: profile, links: [lb], decode: { bytes in
+            let packet = try WireCoding.decode(TestOpaqueWire.self, from: bytes).descriptor()
+            return try OpaquePacket(id: packet.id, destinationID: packet.destinationID, originID: packet.originID,
+                hopsRemaining: packet.hopsRemaining, priority: packet.priority, expiresAt: packet.expiresAt,
+                bytes: Data([0]), immutableHash: packet.immutableHash)
+        }, forwarded: { $0 }, loadPending: { [] }, persistRelay: { _ in }, removeRelay: { _ in },
+           receiveEndpoint: { try await hb.accept($0) })
+        defer { sender.stop(); receiver.stop() }
+        sender.start(); receiver.start(); la.connect(lb); await settle()
+        try await sender.sendOrigin(packet(origin, endpoint)); await settle()
+        XCTAssertEqual(hb.calls, 0); XCTAssertTrue(hb.inbox.isEmpty); XCTAssertTrue(lb.acknowledgments.isEmpty)
     }
 
     @MainActor func testOpaqueControlsCannotAuthenticateInGenericMeshProtocol() throws {

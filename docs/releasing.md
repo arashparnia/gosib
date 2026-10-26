@@ -11,6 +11,8 @@ The maintainer performs these steps for the exact commit intended for publicatio
 5. Create an annotated version tag at the reviewed, passing commit, push it and publish matching GitHub release notes. Preserve older tags and snapshots. Mark experimental releases as prereleases in GitHub.
 6. Resolve the public URL and exact new tag from a clean external SwiftPM consumer, build it, and inspect the library resource bundles. Confirm the tag resolves to the commit qualified by CI.
 
+Version-tag pushes now repeat the full matrix and run `scripts/check-release-consumer.py` for the exact public tag. Push the annotated tag after the branch's checks pass, wait for both tagged jobs (including clean remote consumers) to pass, and then publish the matching GitHub prerelease. This orders publication after the clean consumer check while preserving the same reviewed commit.
+
 Host applications must also verify that Xcode copies the package resource bundles into their app archive and combines the SDK privacy declarations correctly. Apps own their permission strings, entitlements, data disclosures, at-rest protection, business authorization and store submission. Release publication does not assert that a host is ready for App Review.
 
 Community files follow [GitHub's community-profile guidance](https://docs.github.com/en/communities/setting-up-your-project-for-healthy-contributions/about-community-profiles-for-public-repositories). CI uses the [least-privilege and action-pinning guidance](https://docs.github.com/en/actions/reference/security/secure-use). These are concrete practices, not certification that every possible open-source guideline has been satisfied.

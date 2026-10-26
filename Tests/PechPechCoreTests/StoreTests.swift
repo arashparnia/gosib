@@ -61,6 +61,32 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(try reopened.pending().first?.message, original)
     }
 
+    func testCanonicallyEquivalentUnicodeCannotChangeSavedMessageBytesAcrossRestart() throws {
+        let sender = Identity(), receiver = Identity(), outboxURL = url(), inboxURL = url()
+        let original = try Message(senderID: sender.publicIdentity.id, destinationID: receiver.publicIdentity.id,
+                                   channel: "caf\u{00e9}", payload: Data([1]))
+        let changed = try Message(id: original.id, senderID: original.senderID, destinationID: original.destinationID,
+                                  channel: "cafe\u{0301}", payload: original.payload, createdAt: original.createdAt)
+        let outbox = try store(sender, at: outboxURL), inbox = try store(receiver, at: inboxURL)
+        try outbox.queue(original, recipient: receiver.publicIdentity)
+        let receipt = try accept(original, from: sender, at: receiver, store: inbox)
+        let originalReturn = try XCTUnwrap(inbox.outgoingReceipts().first)
+        let reopenedOutbox = try store(sender, at: outboxURL), reopenedInbox = try store(receiver, at: inboxURL)
+        XCTAssertThrowsError(try reopenedOutbox.queue(changed, recipient: receiver.publicIdentity)) {
+            XCTAssertEqual($0 as? PechPechError, .messageConflict)
+        }
+        XCTAssertThrowsError(try accept(changed, from: sender, at: receiver, store: reopenedInbox)) {
+            XCTAssertEqual($0 as? PechPechError, .messageConflict)
+        }
+        XCTAssertEqual(try reopenedOutbox.outgoing(messageID: original.id)?.message, original)
+        XCTAssertEqual(try reopenedInbox.received(messageID: original.id)?.message, original)
+        XCTAssertEqual(try reopenedInbox.received(messageID: original.id)?.receipt, receipt)
+        XCTAssertEqual(try reopenedInbox.outgoingReceipts().first, originalReturn)
+        XCTAssertEqual(try reopenedInbox.inbox().count, 1)
+        try reopenedOutbox.saveReceipt(receipt, authenticatedReceiver: receiver.publicIdentity)
+        XCTAssertTrue(try reopenedOutbox.pending().isEmpty)
+    }
+
     func testIncompatibleCurrentNamespaceSchemaIsRejectedBeforeMutation() throws {
         for definition in [
             "id TEXT,payload BLOB NOT NULL,hash BLOB NOT NULL,receipt BLOB",
@@ -260,6 +286,27 @@ final class StoreTests: XCTestCase {
         let changedCipher = RelayPacket(header: original.header, encrypted: Data(repeating: 8, count: 28), hopsRemaining: 3)
         XCTAssertThrowsError(try relay.enqueueRelay(changedCipher, now: now))
         XCTAssertEqual(try relay.relayPackets(now: now).count, 1)
+    }
+
+    func testRelayAdmissionRequiresCompleteFrameWithinNativeLimit() throws {
+        let sender = Identity(), receiver = Identity(), relayIdentity = Identity(), path = url()
+        let relay = try store(relayIdentity, at: path), now: Int64 = 6_040_000
+        // A seven-digit expiry aligns this synthetic packet's base64 body with
+        // the exact native frame boundary. Its bytes exercise admission only.
+        let fitting = packet(sender, receiver, now: now, lifetime: 60_000, encryptedBytes: 11_925)
+        XCTAssertEqual(try WireCoding.encode(MeshFrame.packet(fitting)).count, RelayPacket.maximumBytes)
+        XCTAssertNoThrow(try fitting.validate(now: now))
+        XCTAssertTrue(try relay.enqueueRelay(fitting, now: now))
+        let oversized = packet(sender, receiver, now: now, lifetime: 60_000, encryptedBytes: 11_926)
+        XCTAssertLessThanOrEqual(try WireCoding.encode(oversized).count, RelayPacket.maximumBytes,
+                                 "The bare packet fits; only its required frame wrapper exceeds the limit")
+        let frameBytes = try WireCoding.encode(MeshFrame.packet(oversized)).count
+        XCTAssertGreaterThan(frameBytes, RelayPacket.maximumBytes)
+        XCTAssertThrowsError(try oversized.validate(now: now)) {
+            XCTAssertEqual($0 as? PechPechError, .frameTooLarge(frameBytes))
+        }
+        XCTAssertThrowsError(try relay.enqueueRelay(oversized, now: now))
+        XCTAssertEqual(try store(relayIdentity, at: path).relayPackets(now: now), [fitting])
     }
 
     func testOriginAllowancePrioritizesUrgentTrafficAndPreservesOwnedData() throws {

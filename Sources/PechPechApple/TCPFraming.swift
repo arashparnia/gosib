@@ -20,3 +20,13 @@ enum LengthPrefixedFrame {
         return Int(length)
     }
 }
+
+/// Known discoveries remain eligible when a connection slot becomes available.
+/// Incoming connections occupy slots too, even though they have no discovery entry.
+enum TCPConnectionCandidates {
+    static func select(known: Set<String>, connected: Set<String>, retrying: Set<String>,
+                       maximumConnections: Int = 4) -> [String] {
+        let available = max(0, maximumConnections - connected.count)
+        return Array(known.subtracting(connected).subtracting(retrying).sorted().prefix(available))
+    }
+}
