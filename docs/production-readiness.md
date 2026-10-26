@@ -1,10 +1,10 @@
-# Production readiness work
+# Production operating contract
 
-The requested target includes background delivery. Release classification, source compatibility, software tests and physical operating behavior are separate facts. A stable release label cannot establish behavior that was not implemented or measured.
+PechPech 1.0 is the stable production SDK release. Its API, delivery semantics and operating conditions are documented here; software verification and physical operating coverage remain separate facts.
 
-## Implemented in the working branch
+## Runtime contract
 
-- Explicit periodic/event-driven retry scheduling, retaining links and caller intent while polling is disabled.
+- Explicit periodic/event-driven retry scheduling, retaining links and caller intent while node retry polling is disabled.
 - Coalesced native queue-capacity signals and event-driven retries of refused work.
 - Bounded, retained opaque queue-admission proof across asynchronous storage reads.
 - Indexed active-message lookups and transactional pruning of expired transport return copies without deleting inbox results.
@@ -12,17 +12,17 @@ The requested target includes background delivery. Release classification, sourc
 - Opt-in Bluetooth manager restoration with stable host-selected identifiers, inherited-session quarantine, fresh service publication and fresh link authentication.
 - Portable Linux tests using development-only Swift Crypto/SQLite shims, seeded loss/duplication/reordering, process-kill recovery and real scoped ENOSPC/SQLITE_FULL failures.
 
-The shipping package continues using Apple's CryptoKit and system frameworks. Linux qualification copies the unmodified SDK/test sources to `.build/linux-qualification/package` and supplies module shims there; it does not establish Linux radio support or native Apple-framework compatibility.
+The shipping package uses Apple's CryptoKit and system frameworks. Linux qualification copies the unmodified SDK/test sources to an ignored workspace and supplies module shims there. With `--mock-bluetooth`, it executes actual BLE adapter code against a development-only CoreBluetooth double. It does not establish native Apple framework or radio behavior.
 
-The [26 October Linux record](verification-linux-2026-10-26.md) reports 95 passing tests in both debug and optimized builds, four process-kill cases and three actual disk-full cases in each build, the seeded fault schedule, vectors, demo and resources. Native Apple validation remains separate.
+The [1.0 verification record](verification-1.0-2026-10-26.md) reports current Linux and native Apple checks. The [earlier Linux record](verification-linux-2026-10-26.md) retains the pre-restoration results and their exact source commit.
 
 ## Reproduce software qualification on Linux
 
-Install Swift 5.10 or later, SQLite headers, a C compiler, Python 3 and Node 22 or later. Use a reviewed Swift toolchain and verify its upstream signature. Then run:
+Install Swift 6.1 or later, SQLite headers, a C compiler, Python 3 and Node 22 or later. Use a reviewed Swift toolchain and verify its upstream signature. Then run:
 
 ```sh
-python3 scripts/check-linux-core.py --configuration debug
-python3 scripts/check-linux-core.py --configuration release
+python3 scripts/check-linux-core.py --mock-bluetooth --configuration debug
+python3 scripts/check-linux-core.py --mock-bluetooth --configuration release
 node scripts/check-interop-vector.cjs
 ```
 
@@ -36,8 +36,8 @@ Restoration is a recovery attempt. Local Core Bluetooth cancellation does not gu
 
 Continuous TCP execution, delivery after force-quit and uninterrupted arbitrary-hop background routes are not established capabilities. Supported background states and recovery behavior need an explicit host contract and native implementation/verification before claiming those behaviors.
 
-## Remaining release evidence
+## Deployment evidence
 
-The Linux-only work does not compile or execute CoreBluetooth, Network or Keychain code. Native Apple compilation is an independent check; real-device coverage is listed in [qualification](qualification.md). No independent security audit was performed. Key protection, at-rest file protection, host business transactions and an explicit history-retention policy remain host responsibilities.
+Linux mocks do not compile against or execute Apple's native frameworks. Native Apple compilation is an independent CI check; real-device coverage is listed in [qualification](qualification.md). No independent security audit was performed. Key protection, at-rest file protection, host business transactions and an explicit history-retention policy remain host responsibilities.
 
 Production release notes must state the actual supported operating conditions, exact-commit verification and known limits. Historical tags and verification records stay immutable. Do not convert the Linux test results into physical radio, background, latency or universal correctness claims.

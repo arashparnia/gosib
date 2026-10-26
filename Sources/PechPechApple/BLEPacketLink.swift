@@ -27,6 +27,7 @@ public final class BLEPacketLink: NSObject, PacketLink {
     private var generation = UUID()
     private let restoration: BLERestorationConfiguration?
     private var centralRestorationHandled = false
+    private var centralPowerPolicy = BLECentralRestorationPowerPolicy()
     private var peripheralRestorationHandled = false
     private var peripheralRecovery = BLEPeripheralRestorationRecovery()
     private var serviceName = ""
@@ -162,6 +163,7 @@ public final class BLEPacketLink: NSObject, PacketLink {
         messageCharacteristic = nil
         messageService = nil
         centralRestorationHandled = false
+        centralPowerPolicy = BLECentralRestorationPowerPolicy()
         peripheralRestorationHandled = false
         peripheralRecovery = BLEPeripheralRestorationRecovery()
         serviceAdded = false
@@ -271,6 +273,9 @@ public final class BLEPacketLink: NSObject, PacketLink {
 
     private func driveRestoredClients() {
         guard running, let manager = centralManager, manager.state == .poweredOn else { return }
+        // Restoration may observe power-on before the first state delegate callback.
+        // A later unknown state must then invalidate the handles rather than preserve them.
+        _ = centralPowerPolicy.transition(to: .poweredOn)
         let token = generation
         for peripheral in Array(restoredToCancel.values) {
             guard isCurrent(token), centralManager === manager else { return }
@@ -573,7 +578,15 @@ extension BLEPacketLink: @preconcurrency CBCentralManagerDelegate {
         let token = generation
         onState?("BLE: \(describe(central.state))")
         guard isCurrent(token), central === centralManager else { return }
-        if central.state == .poweredOn {
+        let state: BLECentralRestorationPowerPolicy.State
+        switch central.state {
+        case .unknown: state = .unknown
+        case .poweredOff: state = .poweredOff
+        case .poweredOn: state = .poweredOn
+        default: state = .invalidating
+        }
+        let action = centralPowerPolicy.transition(to: state)
+        if action == .poweredOn {
             driveRestoredClients()
             guard isCurrent(token), central === centralManager else { return }
             ensureScanning()
@@ -581,14 +594,26 @@ extension BLEPacketLink: @preconcurrency CBCentralManagerDelegate {
             for link in Array(clients.values) {
                 guard isCurrent(token), central === centralManager else { return }
                 guard clearClientChannel(link) else { return }
-                // A restore callback may precede the initial powered-on state callback.
-                // Keep quarantined handles until the manager can cancel/reconnect them.
-                if link.restorationRecovery == nil {
+                if action == .disconnected, var recovery = link.restorationRecovery {
+                    // poweredOff is itself a documented local-disconnection boundary;
+                    // a separate didDisconnect callback need not be awaited to retry.
+                    recovery.didDisconnect()
+                    link.restorationRecovery = recovery
+                    link.attemptStarted = nil
+                    link.retryAfter = .distantPast
+                    link.closing = false
+                } else if action != .preserveInitialRestoration || link.restorationRecovery == nil {
+                    // States below poweredOff invalidate CBPeripheral objects. Only
+                    // the initial unknown callback may precede valid restored handles.
                     link.peripheral.delegate = nil
                     clients.removeValue(forKey: link.peripheral.identifier)
                 }
             }
             guard isCurrent(token), central === centralManager else { return }
+            if action == .discardInvalidHandles {
+                for peripheral in restoredToCancel.values { peripheral.delegate = nil }
+                restoredToCancel.removeAll()
+            }
             publishPeers()
         }
     }

@@ -233,7 +233,14 @@ public final class CBCentralManager: NSObject {
         mockCancellations.append(peripheral)
         if peripheral.state != .disconnected { peripheral.state = .disconnecting }
     }
-    public func mockSetState(_ state: CBManagerState) { self.state = state; delegate?.centralManagerDidUpdateState(self) }
+    public func mockSetState(_ state: CBManagerState) {
+        mockSetStateWithoutCallback(state)
+        delegate?.centralManagerDidUpdateState(self)
+    }
+    public func mockSetStateWithoutCallback(_ state: CBManagerState) {
+        self.state = state
+        if state != .poweredOn { isScanning = false }
+    }
     public func mockRestore(_ dict: [String: Any]) { delegate?.centralManager(self, willRestoreState: dict) }
     public func mockDiscover(_ peripheral: CBPeripheral, advertisementData: [String: Any] = [:], rssi: NSNumber = -40) {
         delegate?.centralManager(self, didDiscover: peripheral, advertisementData: advertisementData, rssi: rssi)
@@ -281,7 +288,11 @@ public final class CBPeripheralManager: NSObject {
     public func respond(to request: CBATTRequest, withResult result: CBATTError.Code) {
         mockResponses.append(MockResponse(request: request, result: result))
     }
-    public func mockSetState(_ state: CBManagerState) { self.state = state; delegate?.peripheralManagerDidUpdateState(self) }
+    public func mockSetState(_ state: CBManagerState) {
+        self.state = state
+        if state != .poweredOn { isAdvertising = false }
+        delegate?.peripheralManagerDidUpdateState(self)
+    }
     public func mockRestore(_ dict: [String: Any]) {
         if let services = dict[CBPeripheralManagerRestoredStateServicesKey] as? [CBMutableService] { mockServices = services }
         delegate?.peripheralManager(self, willRestoreState: dict)

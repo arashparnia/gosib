@@ -88,6 +88,30 @@ final class BLERestorationTests: XCTestCase {
         XCTAssertFalse(recovery.beginReset(poweredOn: true), "Later state callbacks must not repeatedly destroy the fresh service.")
     }
 
+    func testInitialUnknownMayPreserveRestorationButLaterUnknownInvalidatesHandles() {
+        var power = BLECentralRestorationPowerPolicy()
+        XCTAssertEqual(power.transition(to: .unknown), .preserveInitialRestoration)
+        XCTAssertEqual(power.transition(to: .unknown), .preserveInitialRestoration)
+        XCTAssertEqual(power.transition(to: .poweredOn), .poweredOn)
+        XCTAssertEqual(power.transition(to: .unknown), .discardInvalidHandles)
+    }
+
+    func testPowerOffProvidesDisconnectBoundaryWithoutInventingADelegateCallback() {
+        var power = BLECentralRestorationPowerPolicy()
+        XCTAssertEqual(power.transition(to: .poweredOn), .poweredOn)
+        XCTAssertEqual(power.transition(to: .poweredOff), .disconnected)
+        XCTAssertEqual(power.transition(to: .poweredOn), .poweredOn)
+        // A subsequent service reset must discard the old objects, not wait for a timer.
+        XCTAssertEqual(power.transition(to: .invalidating), .discardInvalidHandles)
+    }
+
+    func testExplicitInvalidationEndsInitialUnknownException() {
+        var power = BLECentralRestorationPowerPolicy()
+        XCTAssertEqual(power.transition(to: .invalidating), .discardInvalidHandles)
+        XCTAssertEqual(power.transition(to: .unknown), .discardInvalidHandles)
+        XCTAssertEqual(power.transition(to: .poweredOn), .poweredOn)
+    }
+
     #if canImport(CoreBluetooth)
     @MainActor func testOptInConstructionDoesNotStartManagers() async throws {
         let configuration = try BLERestorationConfiguration(centralIdentifier: "host.central", peripheralIdentifier: "host.peripheral")

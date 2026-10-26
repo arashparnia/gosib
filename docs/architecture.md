@@ -1,13 +1,13 @@
 # Architecture
 
-PechPech (پچ‌پچ, whispering) extracts the general communication mechanism developed for GARVI into a separate open-source package. Release 0.3 keeps the generic node's version-2 protocol/storage namespace introduced in 0.2 and adds routing for host-managed encrypted profiles. A host's envelope and business receipts remain distinct from the generic protocol. The prior 0.1 SDK release has incompatible APIs, wire identifiers and storage; see [migration](migration-0.2.md).
+PechPech (پچ‌پچ, whispering) extracts the general communication mechanism developed for GARVI into a separate open-source package. Release 1.0 keeps the generic node's version-2 protocol/storage namespace introduced in 0.2 and retains routing for host-managed encrypted profiles introduced in 0.3. A host's envelope and business receipts remain distinct from the generic protocol. The prior 0.1 SDK release has incompatible APIs, wire identifiers and storage; see [migration](migration-0.2.md).
 
 ## Layers
 
 | Layer | Owns | Does not establish |
 | --- | --- | --- |
 | `PechPechCore` | Generic encrypted packets and durable byte receipts, plus routing/authenticated neighbor sessions for host-managed opaque profiles | Trust enrollment or business acceptance |
-| `PechPechApple` | Foreground BLE and TCP/Bonjour links, discovery, fragmentation, per-link queues, disconnection events and an optional host-scoped Keychain identity helper | Application permissions or durable endpoint delivery |
+| `PechPechApple` | BLE with optional manager restoration, TCP/Bonjour links, discovery, fragmentation, per-link queues, disconnection events and an optional host-scoped Keychain identity helper | Application permissions or durable endpoint delivery |
 | Host application | Secure key storage, trusted recipient selection, sender authorization, payload schema, UI, lifecycle and business transactions | A guarantee that radios or intermediate devices will remain available |
 
 `PacketLink` connects the routing core to a transport. Link-local peer identifiers are temporary transport handles, not endpoint identities. Signed identity exchange binds a handle to a cryptographic peer; applications still need an independent trust policy.
@@ -32,7 +32,7 @@ Current tables use the `pechpech_` namespace. The store rejects unrecognized use
 
 The recipient records the inbox result and its outgoing endpoint receipt transactionally. Repeated messages with the same identity and contents recover the same result. A conflicting reuse of an identity is rejected. The sender persists a matching authenticated receipt before reporting durable endpoint delivery. Lost receipts can return through a different route; intermediate relay acknowledgments cannot substitute for them.
 
-Inbox and outbox history is retained for deduplication and recovery; the first release does not automatically compact it or impose the relay spool's capacity on it. A successfully stored receipt removes an outgoing message from the pending query without deleting the original snapshot. Receipt acknowledgment retires an active return packet while keeping the durable received message/result. Applications need an explicit, reviewed retention policy and storage monitoring before long-running deployment.
+Inbox and outbox history is retained for deduplication and recovery; the store does not automatically compact it or impose the relay spool's capacity on it. A successfully stored receipt removes an outgoing message from the pending query without deleting the original snapshot. Receipt acknowledgment retires an active return packet while keeping the durable received message/result. Applications need an explicit, reviewed retention policy and storage monitoring before long-running deployment.
 
 Applications that perform actions need a second durable boundary. For example, receiving bytes for a stock adjustment is distinct from validating permission and committing that adjustment. Store application effects and their own idempotent result atomically in application-owned storage. GARVI's prepare/grant/commit and kitchen receipt semantics belong at this layer, not in a generic radio transport.
 
@@ -48,9 +48,9 @@ Transport queues are smaller, transient buffers. Successful local enqueue, a com
 
 ## Deployment scope
 
-The package currently targets Swift 5.9, iOS 16 and macOS 13 or later. Apple adapters require native APIs and user-granted permissions. There is no Android, Linux or browser adapter in this release. The versioned protocol documentation is intended to support future independent implementations.
+The package currently targets Swift 6.1, iOS 16 and macOS 13 or later. Apple adapters require native APIs and user-granted permissions. There is no Android, Linux or browser adapter in this release. The versioned protocol documentation is intended to support future independent implementations.
 
-Foreground nearby operation is the initial scope. Locking a device, closing an app or moving a relay out of range can interrupt a route. Core tests and injected-link demos do not qualify native radio performance. See [qualification](qualification.md).
+Foreground sessions and OS-permitted Bluetooth background recovery are integration modes. Locking a device, closing an app or moving a relay out of range can interrupt a route. Core tests and injected-link demos do not qualify native radio performance. See [integration](integration.md) and [qualification](qualification.md).
 
 ## Host adoption boundaries
 

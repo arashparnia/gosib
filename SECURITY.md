@@ -1,6 +1,6 @@
 # Security policy
 
-PechPech is experimental. It has no independent cryptographic audit or production security certification. Security fixes target the latest published release and the current `main` branch; older snapshots are not maintained separately. The prior 0.1 release is incompatible with the generic node's current wire and storage namespaces; see [migration](docs/migration-0.2.md).
+PechPech has no independent cryptographic audit or security certification. Security fixes target the latest published release and the current `main` branch; older snapshots are not maintained separately. The prior 0.1 release is incompatible with the generic node's current wire and storage namespaces; see [migration](docs/migration-0.2.md).
 
 ## Report a vulnerability privately
 

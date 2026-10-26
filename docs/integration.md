@@ -1,10 +1,10 @@
 # Integrating PechPech
 
-The first package supports native iOS 16+ and macOS 13+ applications using Swift 5.9+. It has no external package dependencies. Add `PechPechCore` for protocol and storage, and `PechPechApple` for the native BLE/TCP adapters. The root [README](../README.md) and `pechpech-demo` provide a runnable core example.
+The package supports native iOS 16+ and macOS 13+ applications using Swift 6.1+. It has no external package dependencies. Add `PechPechCore` for protocol and storage, and `PechPechApple` for the native BLE/TCP adapters. The root [README](../README.md) and `pechpech-demo` provide a runnable core example.
 
 Both library products include SwiftPM resource bundles with a privacy manifest and full MIT notice. Retain them in the distributed host and review the app's own data disclosures; see [packaging and privacy](packaging.md).
 
-These generic-node instructions target PechPech 0.3.1 and wire version 2, with the same storage namespace as 0.2. The prior 0.1 release is incompatible. Choose a dedicated current-release database or complete a reviewed migration using [the upgrade guide](migration-0.2.md); preserve unresolved records and private identities.
+These generic-node instructions target PechPech 1.0.0 and wire version 2, with the same storage namespace as 0.2. The prior 0.1 release is incompatible. Choose a dedicated current-release database or complete a reviewed migration using [the upgrade guide](migration-0.2.md); preserve unresolved records and private identities.
 
 If the host already owns an encrypted envelope, persistent keys and durable message/business ledgers, consider the separate [opaque profile integration](opaque-profiles.md). `OpaquePacketRouter` shares native transport and neighbor authentication while preserving host-owned bytes and persistence; it does not automatically convert data to the generic `MeshStore` or receipt model.
 
@@ -58,7 +58,7 @@ Both conform to the `@MainActor` `PacketLink` interface. Keep adapters and the n
 
 Each adapter is capped at four neighbors. BLE peer queues hold at most 32 messages / 128 KiB. TCP peer queues hold at most 256 KiB including framing. BLE selects higher priorities between complete message streams; TCP retains socket ordering rather than preempting already queued bytes. Applications should keep bulk traffic paced and avoid flooding transport queues.
 
-The unreleased `PacketLink.onWorkAvailable` callback reports that previously refused local admission may fit again. Nodes coalesce that event and retry eligible work without treating queue drain as delivery. Existing custom adapters can keep using host retry scheduling through the default no-op callback implementation.
+The `PacketLink.onWorkAvailable` callback reports that previously refused local admission may fit again. Nodes coalesce that event and retry eligible work without treating queue drain as delivery. Existing custom adapters can keep using host retry scheduling through the default no-op callback implementation.
 
 The node additionally caps ready neighbors at four distinct endpoint identities across its links. Its `waitingForRoute` event means there are no authenticated neighbors; `transmitting` means there is a local forwarding opportunity. Neither event proves final-recipient reachability. Use authenticated delivery receipts for completion and application-specific uncertainty feedback while waiting.
 
@@ -89,11 +89,11 @@ This package does not create an App Clip, request background modes, provision si
 
 Start the nearby session while the host is foreground and stop it when the intended session ends. Stop new attempts when user intent or host lifecycle requires it. Durable outgoing state remains recoverable independently of transient transport queues.
 
-A foreground receiver is the initial scope. Suspension, locking, force-quit or an out-of-range intermediary may break a path. New Apple background facilities are separate deployment work; adding a background entitlement does not prove continuous receiving. See [qualification](qualification.md).
+Foreground sessions and OS-permitted Bluetooth background recovery are supported integration modes. Suspension, locking, force-quit or an out-of-range intermediary may break a path. Adding a background entitlement does not establish continuous receiving. See [qualification](qualification.md).
 
-### Event-driven background integration (unreleased)
+### Event-driven background integration
 
-`MeshNode` and `OpaquePacketRouter` add `setRetryScheduling(.eventDriven)` to stop polling while retaining current links and caller-authorized work. Change back to `.periodic` when the host wants periodic retries; that also requests an immediate retry pass. Explicit `tick()` remains available. Changing scheduling is distinct from `stop()`, which closes links and cancels current outgoing intent. A reconstructed generic node still requires explicit resumption of original outgoing messages.
+`MeshNode` and `OpaquePacketRouter` add `setRetryScheduling(.eventDriven)` to stop node retry polling while retaining current links and caller-authorized work. Adapter maintenance timers can still run while the process is scheduled; they cannot wake a suspended app. Change back to `.periodic` when the host wants periodic retries; that also requests an immediate retry pass. Explicit `tick()` remains available. Changing scheduling is distinct from `stop()`, which closes links and cancels current outgoing intent. A reconstructed generic node still requires explicit resumption of original outgoing messages.
 
 A host that uses iOS Bluetooth background events must declare the applicable `UIBackgroundModes` values, `bluetooth-central` and `bluetooth-peripheral`, and retain/recreate its node according to its own lifecycle policy. The OS controls wake opportunities and changes discovery/advertising behavior in the background. TCP is not a continuous background transport. See [Apple's background guidance](https://developer.apple.com/library/archive/documentation/NetworkingInternetWeb/Conceptual/CoreBluetooth_concepts/CoreBluetoothBackgroundProcessingForIOSApps/PerformingTasksWhileYourAppIsInTheBackground.html).
 

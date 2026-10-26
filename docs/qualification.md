@@ -1,8 +1,8 @@
 # Verification and qualification
 
-PechPech 0.3 is experimental. The repository separates deterministic software checks from deployment claims that require real devices.
+PechPech 1.0 is a stable SDK release. The repository separates API/software verification from deployment claims that require real devices.
 
-[The current 0.3.1 record](verification-0.3.1-2026-10-26.md) separates SDK and packaging checks from host deployment qualification. [The initial 0.3 record](verification-0.3-2026-10-04.md) retains the prior release evidence. [The 4 October 0.2 record](verification-2026-10-04.md) retains the earlier source and version-2 interoperability results. [The historical 3 October record](verification-2026-10-03.md) applies to the prior 0.1 revision; it does not qualify current names or wire bytes. See [compatibility and migration](migration-0.2.md) before an upgrade.
+[The 1.0 record](verification-1.0-2026-10-26.md) separates SDK and packaging checks from host deployment qualification. The [0.3.1 record](verification-0.3.1-2026-10-26.md), [initial 0.3 record](verification-0.3-2026-10-04.md), [0.2 record](verification-2026-10-04.md) and [historical 0.1 record](verification-2026-10-03.md) retain prior evidence. See [the 1.0 upgrade guide](migration-1.0.md) before an upgrade.
 
 ## Software checks
 
@@ -38,7 +38,7 @@ Measure durable endpoint receipt latency separately from application processing 
 
 The BLE adapter concurrently scans and advertises through CoreBluetooth while the host is active. Native permissions and powered radios are necessary. The system can suspend or terminate mobile processes; a moving or closed intermediary may break the path.
 
-Apple offers additional background capabilities, including certain Live Activity privileges on iOS 26 and later, but PechPech does not implement or qualify a background deployment model. See [Apple's current CoreBluetooth documentation](https://developer.apple.com/documentation/corebluetooth) and its [background processing guidance](https://developer.apple.com/library/archive/documentation/NetworkingInternetWeb/Conceptual/CoreBluetooth_concepts/CoreBluetoothBackgroundProcessingForIOSApps/PerformingTasksWhileYourAppIsInTheBackground.html).
+PechPech implements event-driven retries and opt-in Core Bluetooth manager restoration. Hosts declare their background modes, recreate only authorized sessions and retain stable restoration identifiers. Inherited links/services are reset before fresh authentication. Scanning and advertising change in the background, and local cancellation is not proof of a physical disconnect. These mechanisms are software-tested; no physical background deployment matrix was executed for this release. See [integration](integration.md#event-driven-background-integration), [Apple's background guidance](https://developer.apple.com/library/archive/documentation/NetworkingInternetWeb/Conceptual/CoreBluetooth_concepts/CoreBluetoothBackgroundProcessingForIOSApps/PerformingTasksWhileYourAppIsInTheBackground.html) and [relaunch rules](https://developer.apple.com/documentation/technotes/tn3115-bluetooth-state-restoration-app-relaunch-rules).
 
 TCP/Bonjour can use an available local path. Enabling [Network framework peer-to-peer links](https://developer.apple.com/documentation/network/nwparameters/includepeertopeer) permits eligible links; it does not force a particular Wi-Fi route or guarantee connectivity across different networks.
 

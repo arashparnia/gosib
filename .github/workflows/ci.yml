@@ -20,6 +20,9 @@ jobs:
     runs-on: ubuntu-24.04
     container:
       image: swift:6.1.2-noble@sha256:6676af406f96360a37297db0ce36d1f3998687c724dde359d6a7b43a1f809d27
+    env:
+      CC: clang
+      CXX: clang++
     strategy:
       fail-fast: false
       matrix:
@@ -32,7 +35,7 @@ jobs:
       - name: Linux qualification dependencies
         run: |
           apt-get update -qq
-          apt-get install -y --no-install-recommends python3 libsqlite3-dev pkg-config clang
+          apt-get install -y --no-install-recommends python3 libsqlite3-dev pkg-config build-essential
           swift --version
           pkg-config --modversion sqlite3
       - name: Portable and BLE adapter mock tests with failure probes

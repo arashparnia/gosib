@@ -20,7 +20,7 @@ def output(*command: str, cwd: Path = ROOT) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("tag", help="Published annotated tag, for example v0.3.1")
+    parser.add_argument("tag", help="Published annotated tag, for example v1.0.0")
     options = parser.parse_args()
     if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", options.tag):
         parser.error("Expected a vMAJOR.MINOR.PATCH release tag")
@@ -32,7 +32,7 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="pechpech-release-consumer-") as directory:
         consumer = Path(directory)
         (consumer / "Package.swift").write_text(
-            '// swift-tools-version: 5.9\nimport PackageDescription\n'
+            '// swift-tools-version: 6.1\nimport PackageDescription\n'
             'let package = Package(name: "PechPechReleaseConsumer", '
             'platforms: [.macOS(.v13), .iOS(.v16)], '
             f'dependencies: [.package(url: "{REPOSITORY}", exact: "{options.tag[1:]}")], '

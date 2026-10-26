@@ -8,10 +8,11 @@ The maintainer performs these steps for the exact commit intended for publicatio
 2. Run the full unit suite, release build, independent crypto-vector checker, external consumer-product check, and resource/privacy validation. Compile for the generic iOS Simulator target. Inspect CI for both Apple Silicon and Intel macOS; local checks alone do not replace that record.
 3. Confirm that the source tree, resources and Git archive contain the MIT license and community/security documentation, and contain no credentials, runtime databases, operational messages, private keys or generated build products. Synthetic fixture seeds must be clearly identified as test material.
 4. Update release notes and verification evidence with the actual checks and remaining limits. Do not turn compile/injected-link results into physical radio, performance, background or App Store qualification claims.
-5. Create an annotated version tag at the reviewed, passing commit, push it and publish matching GitHub release notes. Preserve older tags and snapshots. Mark experimental releases as prereleases in GitHub.
+5. Create and push an annotated version tag at the reviewed, passing commit. Preserve older tags and snapshots.
 6. Resolve the public URL and exact new tag from a clean external SwiftPM consumer, build it, and inspect the library resource bundles. Confirm the tag resolves to the commit qualified by CI.
+7. After all tagged checks pass, publish matching GitHub release notes. Publish stable releases normally and mark previews as prereleases in GitHub.
 
-Version-tag pushes now repeat the full matrix and run `scripts/check-release-consumer.py` for the exact public tag. Push the annotated tag after the branch's checks pass, wait for both tagged jobs (including clean remote consumers) to pass, and then publish the matching GitHub prerelease. This orders publication after the clean consumer check while preserving the same reviewed commit.
+Version-tag pushes repeat the full matrix and run `scripts/check-release-consumer.py` for the exact public tag. Push the annotated tag after the branch's checks pass, wait for all tagged jobs (including clean remote consumers) to pass, and then publish the matching GitHub release. Linux mock results remain separate from native Apple compilation and physical-device evidence.
 
 Host applications must also verify that Xcode copies the package resource bundles into their app archive and combines the SDK privacy declarations correctly. Apps own their permission strings, entitlements, data disclosures, at-rest protection, business authorization and store submission. Release publication does not assert that a host is ready for App Review.
 

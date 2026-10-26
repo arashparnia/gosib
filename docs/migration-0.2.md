@@ -24,7 +24,7 @@ The versioned host payload/channel schema is separate from the transport wire ve
 
 ## New deployments
 
-Use current modules with a new, dedicated SDK database and an explicitly chosen stable Keychain namespace. Enroll/pin the intended endpoint and authorize senders through the application. Do not use a broad 0.x dependency range that permits unreviewed breaking upgrades; the README uses `.upToNextMinor(from: "0.3.1")`.
+Use current modules with a new, dedicated SDK database and an explicitly chosen stable Keychain namespace. Enroll/pin the intended endpoint and authorize senders through the application. Pre-1.0 hosts should pin their minor series; for the stable API and current dependency range, follow [the 1.0 upgrade guide](migration-1.0.md).
 
 All participants on a usable path need the current protocol. A prior-release intermediary cannot forward current frames merely because it is nearby. There is no mixed-version relay bridge in 0.2.
 

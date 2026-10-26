@@ -1,6 +1,6 @@
 # Working on PechPech
 
-PechPech is an experimental application-independent, foreground nearby messaging SDK.
+PechPech is an application-independent nearby messaging SDK with explicit lifecycle control and opt-in Bluetooth restoration.
 
 - Read README.md and docs/protocol.md before changing public APIs or wire bytes.
 - Keep application permissions, business acceptance and authority selection outside transport adapters.

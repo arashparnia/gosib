@@ -51,7 +51,8 @@ def main() -> None:
                         help="Built PechPechProcessCrashProbe executable")
     parser.add_argument("--timeout", type=float, default=20,
                         help="Maximum seconds per barrier or verification (default: 20)")
-    parser.add_argument("--cc", default="cc", help="C compiler for the scoped ENOSPC interceptor")
+    parser.add_argument("--cc", default=os.environ.get("CC", "cc"),
+                        help="C compiler for the scoped ENOSPC interceptor (defaults to CC or cc)")
     options = parser.parse_args()
     if sys.platform != "linux":
         parser.error("This qualification harness is restricted to Linux")

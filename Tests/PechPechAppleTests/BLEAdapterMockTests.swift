@@ -318,6 +318,115 @@ final class BLEAdapterMockTests: XCTestCase {
         XCTAssertEqual(ready, ["c:" + restored.identifier.uuidString])
     }
 
+    @MainActor func testPowerOffCompletesPendingRestorationResetWithoutDisconnectCallback() async throws {
+        let configuration = try BLERestorationConfiguration(centralIdentifier: "tests.mock.power-reset.central",
+                                                             peripheralIdentifier: "tests.mock.power-reset.peripheral")
+        let link = BLEPacketLink(restoration: configuration)
+        defer { link.stop() }
+        let (manager, _) = try start(link)
+        let restored = CBPeripheral(name: "pending-restored-reset")
+        restored.state = .connected
+        manager.mockRestore([CBCentralManagerRestoredStatePeripheralsKey: [restored]])
+        manager.mockSetState(.unknown)
+        XCTAssertTrue(manager.mockCancellations.isEmpty); XCTAssertTrue(manager.mockConnections.isEmpty)
+        XCTAssertTrue(manager.mockScans.isEmpty)
+        manager.mockSetState(.poweredOn)
+        XCTAssertEqual(manager.mockCancellations.count, 1)
+        XCTAssertTrue(manager.mockConnections.isEmpty)
+        restored.state = .disconnected
+        manager.mockSetState(.poweredOff) // The manager state is the disconnect boundary; no individual callback follows.
+        XCTAssertFalse(manager.isScanning)
+        XCTAssertTrue(manager.mockConnections.isEmpty)
+        manager.mockSetState(.poweredOn)
+        XCTAssertEqual(manager.mockConnections.map(\.identifier), [restored.identifier])
+        XCTAssertEqual(manager.mockScans.count, 2, "Power-on must restart discovery after the system stopped scanning.")
+        XCTAssertEqual(manager.mockCancellations.count, 1, "No peripheral cancellation API should be issued while powered off.")
+    }
+
+    @MainActor func testPowerOffReleasesAnUnfinishedFreshRestorationConnect() async throws {
+        let configuration = try BLERestorationConfiguration(centralIdentifier: "tests.mock.power-request.central",
+                                                             peripheralIdentifier: "tests.mock.power-request.peripheral")
+        let link = BLEPacketLink(restoration: configuration)
+        defer { link.stop() }
+        let (manager, _) = try start(link)
+        let restored = CBPeripheral(name: "unfinished-fresh-request")
+        manager.mockRestore([CBCentralManagerRestoredStatePeripheralsKey: [restored]])
+        manager.mockSetState(.poweredOn)
+        XCTAssertEqual(manager.mockConnections.count, 1)
+        restored.state = .disconnected
+        manager.mockSetState(.poweredOff)
+        XCTAssertEqual(manager.mockConnections.count, 1)
+        manager.mockSetState(.poweredOn)
+        XCTAssertEqual(manager.mockConnections.count, 2, "Power-off must release both restoration gates and the old attempt marker.")
+        XCTAssertTrue(manager.mockCancellations.isEmpty)
+        manager.mockDidConnect(restored)
+        XCTAssertEqual(restored.mockServiceDiscoveries.count, 1)
+    }
+
+    @MainActor func testResetAndPostPowerUnknownInvalidateOldObjectsBeforeRediscovery() async throws {
+        for invalidatingState in [CBManagerState.resetting, .unknown] {
+            let configuration = try BLERestorationConfiguration(centralIdentifier: "tests.mock.invalidate.central",
+                                                                 peripheralIdentifier: "tests.mock.invalidate.peripheral")
+            let link = BLEPacketLink(restoration: configuration)
+            defer { link.stop() }
+            let (manager, _) = try start(link)
+            let old = CBPeripheral(name: "old-restored-object")
+            old.state = .connected
+            manager.mockRestore([CBCentralManagerRestoredStatePeripheralsKey: [old]])
+            manager.mockSetState(.poweredOn)
+            var peers: [String] = [], ready: [String] = []
+            link.onPeers = { peers = $0.map(\.id) }; link.onLinkReady = { ready.append($0) }
+            manager.mockSetState(invalidatingState)
+            XCTAssertTrue(peers.isEmpty)
+            XCTAssertNil(old.delegate, "Invalidating manager states must discard delegate references to old CBPeripheral objects.")
+            manager.mockSetState(.poweredOn)
+            manager.mockDidDisconnect(old); manager.mockDidConnect(old)
+            XCTAssertTrue(manager.mockConnections.isEmpty)
+            XCTAssertTrue(old.mockServiceDiscoveries.isEmpty); XCTAssertTrue(ready.isEmpty)
+            let fresh = CBPeripheral(identifier: old.identifier, name: "fresh-discovery-object")
+            manager.mockDiscover(fresh, advertisementData: [CBAdvertisementDataLocalNameKey: "fresh-discovery-object"])
+            XCTAssertTrue(manager.mockConnections.last === fresh)
+            manager.mockDidConnect(fresh)
+            let service = CBMutableService(type: serviceUUID, primary: true)
+            let characteristic = CBMutableCharacteristic(type: messageUUID, properties: [.write, .notify],
+                                                           value: nil, permissions: [.writeable])
+            service.characteristics = [characteristic]; fresh.services = [service]
+            // An old object with the same identifier cannot deliver callbacks into the new link.
+            link.peripheral(old, didDiscoverServices: nil)
+            fresh.mockDidDiscoverServices(); fresh.mockDidDiscoverCharacteristics(service)
+            fresh.mockNotificationState(characteristic, isNotifying: true)
+            XCTAssertEqual(ready, ["c:" + fresh.identifier.uuidString])
+        }
+    }
+
+    @MainActor func testPowerObservedDuringRestoreEndsInitialUnknownExceptionBeforeStateCallback() async throws {
+        let configuration = try BLERestorationConfiguration(centralIdentifier: "tests.mock.observed-power.central",
+                                                             peripheralIdentifier: "tests.mock.observed-power.peripheral")
+        let link = BLEPacketLink(restoration: configuration)
+        defer { link.onPeers = nil; link.stop() }
+        let (manager, _) = try start(link)
+        // Core Bluetooth restoration can run before the first state delegate callback.
+        manager.mockSetStateWithoutCallback(.poweredOn)
+        let old = CBPeripheral(name: "powered-restoration-object")
+        old.state = .connected
+        var peers: [String] = []
+        link.onPeers = { peers = $0.map(\.id) }
+        manager.mockRestore([CBCentralManagerRestoredStatePeripheralsKey: [old]])
+        XCTAssertEqual(manager.mockCancellations.map(\.identifier), [old.identifier])
+        XCTAssertEqual(peers, ["c:" + old.identifier.uuidString])
+
+        manager.mockSetState(.unknown)
+        XCTAssertTrue(peers.isEmpty, "Power was already observed, so this is an invalidating state loss.")
+        XCTAssertNil(old.delegate)
+        manager.mockSetState(.poweredOn)
+        manager.mockDidDisconnect(old)
+        XCTAssertTrue(manager.mockConnections.isEmpty, "An invalidated restored object must not reconnect.")
+        let fresh = CBPeripheral(identifier: old.identifier, name: "fresh-after-powered-restoration")
+        manager.mockDiscover(fresh, advertisementData: [CBAdvertisementDataLocalNameKey: "fresh-after-powered-restoration"])
+        XCTAssertTrue(manager.mockConnections.first === fresh)
+        XCTAssertTrue(old.mockServiceDiscoveries.isEmpty)
+    }
+
     @MainActor func testStopFromRestorationCallbackCannotStartAReplacementConnection() async throws {
         let configuration = try BLERestorationConfiguration(centralIdentifier: "tests.mock.stop.central",
                                                              peripheralIdentifier: "tests.mock.stop.peripheral")

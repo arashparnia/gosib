@@ -76,6 +76,23 @@ struct BLEPeripheralRestorationRecovery {
     }
 }
 
+/// Initial restoration can precede power-on. Later state loss invalidates old handles.
+struct BLECentralRestorationPowerPolicy {
+    enum State { case unknown, poweredOff, poweredOn, invalidating }
+    enum Action: Equatable { case preserveInitialRestoration, disconnected, poweredOn, discardInvalidHandles }
+    private var initialUnknown = true
+
+    mutating func transition(to state: State) -> Action {
+        if case .unknown = state, initialUnknown { return .preserveInitialRestoration }
+        initialUnknown = false
+        switch state {
+        case .poweredOff: return .disconnected
+        case .poweredOn: return .poweredOn
+        case .unknown, .invalidating: return .discardInvalidHandles
+        }
+    }
+}
+
 enum BLERestorationSelection {
     static func peers(_ identifiers: [UUID], capacity: Int) -> [UUID] {
         var seen = Set<UUID>()

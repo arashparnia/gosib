@@ -8,14 +8,14 @@ PechPech is an open-source Swift SDK for encrypted, offline, store-and-forward m
 
 Developed from GARVI's restaurant communication work, PechPech separates the reusable mechanism from restaurant orders, menus, accounts, and screens. You can build your own payloads and application rules on top of it.
 
-**Status: experimental 0.3.1.** Native iPhone, iPad, and Mac hosts are supported at the source level. Physical radio deployment, latency, and background operation remain unqualified. A usable radio path and OS permissions are required. Android and browser implementations are future work.
+**Production release: 1.0.0.** The Swift SDK supports native iPhone, iPad, and Mac hosts, with foreground links and opt-in OS-permitted Bluetooth background recovery. Public APIs follow semantic versioning. A usable radio path and OS permissions are required; physical coverage, background availability and latency depend on the host and deployment. Android and browser implementations are future work.
 
 ## What is included
 
 | Component | Provides |
 | --- | --- |
 | `PechPechCore` | Endpoint identities, authenticated encryption, immutable durable outbox, deduplicated inbox, endpoint receipts, relay scheduling, and routing for host-managed encrypted profiles |
-| `PechPechApple` | Concurrent BLE scanning/advertising, multiple neighbors, TCP/Bonjour links, bounded transport queues, and host-scoped Keychain identity storage |
+| `PechPechApple` | Concurrent BLE scanning/advertising, opt-in manager restoration, multiple neighbors, TCP/Bonjour links, bounded transport queues, and host-scoped Keychain identity storage |
 | `pechpech-demo` | A runnable two-hop example using injected links and temporary databases; no radios or credentials |
 
 Default bounds are four authenticated neighbor identities, eight forwarding hops, 16 KiB complete wire frames, 4 KiB application payloads, and a relay spool of 512 packets / 8 MiB. Orders, sensor readings, collaborative tools, event operations, and other small-message applications can define their own versioned channels.
@@ -24,7 +24,7 @@ A **delivery receipt means the intended endpoint durably stored the exact messag
 
 ## Try it
 
-Requires macOS 13+, Xcode's Swift toolchain, and Swift 5.9 or later. The libraries also target iOS 16+.
+Requires macOS 13+, Xcode's Swift toolchain, and Swift 6.1 or later. The libraries also target iOS 16+.
 
 ```sh
 git clone https://github.com/arashparnia/pechpech.git
@@ -42,7 +42,7 @@ With Node 22+, `node scripts/check-interop-vector.cjs` independently verifies th
 Add the package in Xcode or in your package manifest:
 
 ```swift
-.package(url: "https://github.com/arashparnia/pechpech.git", .upToNextMinor(from: "0.3.1"))
+.package(url: "https://github.com/arashparnia/pechpech.git", .upToNextMajor(from: "1.0.0"))
 ```
 
 Depend on `.product(name: "PechPechCore", package: "pechpech")` and, for native links, `.product(name: "PechPechApple", package: "pechpech")`.
@@ -88,6 +88,8 @@ For a relay-only participant, return `false` from `authorize`; it can still carr
 
 Retries use the saved immutable record: `try node.resume(message.id)`. `node.pause(message.id)` stops new origin attempts. `node.stop()` closes links and pauses owned messages; after restart, pending outgoing records require explicit resume. Already transmitted packets cannot be recalled. Recover unfinished business processing from `store.inbox()` and your own processing ledger, rather than depending on callbacks to repeat after restart.
 
+For Bluetooth background recovery, configure stable host-scoped identifiers with `BLEPacketLink(restoration:)`, declare the host's background modes, and use `node.setRetryScheduling(.eventDriven)` when relying on transport wake events. The host authorizes session restoration; the SDK establishes fresh neighbor authentication and keeps restored originals paused. See [background integration](docs/integration.md#event-driven-background-integration).
+
 ## Protocol and qualification
 
 - [Architecture](docs/architecture.md): layers, persistence, routing, and application boundaries.
@@ -96,14 +98,15 @@ Retries use the saved immutable record: `try node.resume(message.id)`. `node.pau
 - [Integration](docs/integration.md): identity storage, enrollment, lifecycle, permissions, and custom transports.
 - [Packaging and privacy](docs/packaging.md): SwiftPM products, bundled notices/manifests, and independent consumer checks.
 - [Qualification](docs/qualification.md): software evidence and the physical-device matrix still required.
-- [Production readiness work](docs/production-readiness.md): unreleased event-driven scheduling, Linux failure qualification, and background-delivery boundaries.
-- [Current verification record](docs/verification-0.3.1-2026-10-26.md): checks completed for this release and their limits.
+- [Production operating contract](docs/production-readiness.md): event-driven scheduling, restoration, qualification, and background-delivery boundaries.
+- [Current verification record](docs/verification-1.0-2026-10-26.md): checks completed for this release and their limits.
+- [1.0 upgrade guide](docs/migration-1.0.md): compiler requirement, compatibility and optional background integration.
 - [0.2 verification record](docs/verification-2026-10-04.md): retained evidence for the prior release.
 - [Upgrade guide](docs/migration-0.2.md): module, wire, storage, and version boundaries.
 
 Endpoint encryption uses X25519, HKDF-SHA256, AES-256-GCM, and Ed25519. Relays can see routing metadata and traffic timing, but not message contents. This initial design does not provide forward secrecy against later compromise of the recipient's long-term agreement key. Hosts own secure key storage, at-rest protection, trust revocation, and business permissions. See the [security policy](SECURITY.md).
 
-This is an application protocol over BLE/TCP, not Bluetooth SIG Mesh. Apple's peer-to-peer option permits eligible paths; it does not force a radio path or guarantee reachability. Tests do not establish a background delivery or arbitrary-hop latency guarantee. The initial deployment scope is foreground native apps.
+This is an application protocol over BLE/TCP, not Bluetooth SIG Mesh. Apple's peer-to-peer option permits eligible paths; it does not force a radio path or guarantee reachability. The OS controls Bluetooth background wake opportunities. Continuous TCP execution, force-quit delivery and arbitrary-hop latency are not guaranteed. Physical operating coverage remains a host qualification task.
 
 PechPech has fresh Git history, its own discovery identifiers, cryptographic domains, and generic storage namespace. A host with an existing encrypted protocol can use `OpaquePacketRouter` with explicit codecs and durable hooks; its adoption and migration still require application-specific verification.
 

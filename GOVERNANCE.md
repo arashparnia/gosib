@@ -12,7 +12,9 @@ Contributions use the existing MIT license. There is no additional contributor l
 
 SwiftPM consumes versioned Git tags. Before 1.0, a minor release may intentionally break public API, storage or protocol compatibility and must document the migration. Patch releases in a minor series preserve its wire and storage namespace; they may tighten rejection of invalid or unauthorized input and fix documented behavior. Application payload/channel versions are independent.
 
-Release notes identify compatibility effects and link the checks for the exact release commit. Tags and published historical snapshots are preserved. A GitHub prerelease marks experimental deployment status; a numeric SwiftPM tag alone is not a production qualification claim.
+Starting with 1.0, patches and minor releases preserve existing public API, wire and storage compatibility. Additive APIs and explicitly selected new protocol versions may be introduced without silently changing existing peers or stores. Incompatible changes require a major release and an upgrade guide. Security validation may tighten rejection of invalid input; release notes describe the effect.
+
+Release notes identify compatibility effects and link the checks for the exact release commit. Tags and published historical snapshots are preserved. Production releases use normal GitHub releases; previews use the prerelease flag. Stable status commits to the documented API and operating contract, while physical platform coverage and measurements are recorded separately. It is not a security certification or an uninterrupted radio-service guarantee.
 
 The latest published release and current `main` receive fixes. Earlier snapshots are not maintained as separate branches. Never silently discard unresolved stores or rotate identities to make an upgrade appear successful.
 

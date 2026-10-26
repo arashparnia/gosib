@@ -1,10 +1,10 @@
 # SwiftPM distribution and privacy resources
 
-PechPech ships source-based SwiftPM products for iOS 16+ and macOS 13+ using Swift 5.9 or later. `PechPechCore` contains the protocol, cryptography and SQLite persistence; `PechPechApple` adds native links and secure identity storage. There are no external SwiftPM dependencies. The optional demo and Node interoperability checker are development tools.
+PechPech ships source-based SwiftPM products for iOS 16+ and macOS 13+ using Swift 6.1 or later. `PechPechCore` contains the protocol, cryptography and SQLite persistence; `PechPechApple` adds native links and secure identity storage. There are no external SwiftPM dependencies. The optional demo and Node interoperability checker are development tools.
 
 ## Installation and verification
 
-Add the public repository URL and a reviewed version range in Xcode or your package manifest, then select the library products your host needs. Avoid an unbounded pre-1.0 dependency range that could admit a breaking minor release. Commit the host's `Package.resolved` when reproducible app builds are required.
+Add the public repository URL and a reviewed version range in Xcode or your package manifest, then select the library products your host needs. For stable 1.x releases, use `.upToNextMajor(from: "1.0.0")`. Commit the host's `Package.resolved` when reproducible app builds are required.
 
 The checked-in [independent consumer](../Examples/PackageConsumer/Package.swift) depends on the package as a separate client and compiles native construction, callback and delivery APIs. It starts no radios and uses no real Keychain or runtime database. Verify products and resources locally with:
 
@@ -16,7 +16,7 @@ swift build --package-path Examples/PackageConsumer -c release
 
 The resource checker parses the source and built property lists and verifies that both library bundles contain the exact complete MIT notice. CI repeats this for SwiftPM macOS products and generic iOS Simulator products. Before publishing, also build a clean consumer of the public URL and exact new Git tag; local path resolution does not prove the remote release exists.
 
-Annotated version-tag pushes run the full CI matrix and `python3 scripts/check-release-consumer.py vMAJOR.MINOR.PATCH`. The latter builds a temporary consumer against the public repository with an exact version, checks the resolved revision against the reviewed checkout and peeled remote tag, and validates both compiled library resource bundles. Publish the GitHub prerelease only after that tagged run passes.
+Annotated version-tag pushes run the full CI matrix and `python3 scripts/check-release-consumer.py vMAJOR.MINOR.PATCH`. The latter builds a temporary consumer against the public repository with an exact version, checks the resolved revision against the reviewed checkout and peeled remote tag, and validates both compiled library resource bundles. Publish the matching GitHub release only after that tagged run passes; stable releases are not marked as prereleases.
 
 ## SDK privacy declarations
 

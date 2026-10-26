@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--swift", default="swift", help="Swift executable (5.10 or later)")
+    parser.add_argument("--swift", default="swift", help="Swift executable (6.1 or later)")
     parser.add_argument("--jobs", type=int, default=2)
     parser.add_argument("--configuration", choices=("debug", "release"), default="debug")
     parser.add_argument("--mock-bluetooth", action="store_true",
@@ -56,7 +56,7 @@ def main() -> None:
         mock_target = '.target(name: "CoreBluetooth", path: "Shims/CoreBluetooth"),'
         mock_dependencies = ', "CoreBluetooth"'
         mock_test_settings = ', swiftSettings: [.define("PECHPECH_MOCK_BLUETOOTH")]'
-    manifest = '''// swift-tools-version: 5.10
+    manifest = '''// swift-tools-version: 6.1
 import PackageDescription
 let package = Package(name: "PechPechLinuxQualification", dependencies: [
     .package(url: "https://github.com/apple/swift-crypto.git", exact: "3.15.1"),
@@ -71,7 +71,7 @@ let package = Package(name: "PechPechLinuxQualification", dependencies: [
     .executableTarget(name: "PechPechProcessCrashProbe", dependencies: ["PechPechCore"], path: "Tests/ProcessCrashProbe"),
     .testTarget(name: "PechPechCoreTests", dependencies: ["PechPechCore", "CryptoKit", "SQLite3"], resources: [.copy("Fixtures")]),
     .testTarget(name: "PechPechAppleTests", dependencies: ["PechPechApple", "PechPechCore", "CryptoKit"MOCK_DEPENDENCIES]MOCK_TEST_SETTINGS)
-], swiftLanguageVersions: [.v5])
+], swiftLanguageModes: [.v5])
 '''
     (package / "Package.swift").write_text(
         manifest.replace("MOCK_TARGET", mock_target).replace("MOCK_DEPENDENCIES", mock_dependencies)
