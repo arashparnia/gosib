@@ -95,7 +95,21 @@ A foreground receiver is the initial scope. Suspension, locking, force-quit or a
 
 `MeshNode` and `OpaquePacketRouter` add `setRetryScheduling(.eventDriven)` to stop polling while retaining current links and caller-authorized work. Change back to `.periodic` when the host wants periodic retries; that also requests an immediate retry pass. Explicit `tick()` remains available. Changing scheduling is distinct from `stop()`, which closes links and cancels current outgoing intent. A reconstructed generic node still requires explicit resumption of original outgoing messages.
 
-A host that uses iOS Bluetooth background events must declare the applicable `UIBackgroundModes` values, `bluetooth-central` and `bluetooth-peripheral`, and retain/recreate its node according to its own lifecycle policy. The OS controls wake opportunities and changes discovery/advertising behavior in the background. This package does not yet implement Core Bluetooth state restoration after process termination, and TCP is not a continuous background transport. Those deployment limits remain explicit; event-driven scheduling alone cannot promise delivery while suspended, terminated or force-quit. See [Apple's background guidance](https://developer.apple.com/library/archive/documentation/NetworkingInternetWeb/Conceptual/CoreBluetooth_concepts/CoreBluetoothBackgroundProcessingForIOSApps/PerformingTasksWhileYourAppIsInTheBackground.html) and [production readiness](production-readiness.md).
+A host that uses iOS Bluetooth background events must declare the applicable `UIBackgroundModes` values, `bluetooth-central` and `bluetooth-peripheral`, and retain/recreate its node according to its own lifecycle policy. The OS controls wake opportunities and changes discovery/advertising behavior in the background. TCP is not a continuous background transport. See [Apple's background guidance](https://developer.apple.com/library/archive/documentation/NetworkingInternetWeb/Conceptual/CoreBluetooth_concepts/CoreBluetoothBackgroundProcessingForIOSApps/PerformingTasksWhileYourAppIsInTheBackground.html).
+
+Opt in to manager restoration with identifiers that remain stable across authorized launches:
+
+```swift
+let restoration = try BLERestorationConfiguration(
+    centralIdentifier: "com.example.host.pechpech.central",
+    peripheralIdentifier: "com.example.host.pechpech.peripheral"
+)
+let ble = BLEPacketLink(restoration: restoration)
+```
+
+Pass `ble` to the node/router, then select `.eventDriven` when the host wants transport-event scheduling. `BLEPacketLink()` remains opt-out. Identifiers must be nonempty, distinct, at most 1,024 UTF-8 bytes and contain no null characters. The host recreates the same identifiers only when its persisted session policy authorizes a nearby session; it must handle its app/scene restoration lifecycle rather than relying solely on nonnil launch options. Host background capabilities and permission prompts remain outside the adapter.
+
+Restored connections are not authenticated peers. The adapter resets inherited sessions, waits for local disconnection before requesting a fresh connection, republishes fresh GATT services and requires fresh subscription/authentication. Local cancellation does not guarantee immediate underlying physical disconnection; a surviving remote peer may need service invalidation or reconnection before a fresh handshake succeeds. Restored outbox messages still require explicit resume. This is OS-permitted background recovery, without a continuous-delivery, force-quit, coverage or latency guarantee. See [Apple's relaunch rules](https://developer.apple.com/documentation/technotes/tn3115-bluetooth-state-restoration-app-relaunch-rules) and [production readiness](production-readiness.md).
 
 ## Adding another transport or platform
 

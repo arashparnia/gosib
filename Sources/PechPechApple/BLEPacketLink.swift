@@ -3,7 +3,7 @@ import Foundation
 import PechPechCore
 @preconcurrency import CoreBluetooth
 
-/// Foreground multi-neighbor BLE transport. The caller owns authentication, retries,
+/// Multi-neighbor BLE transport with opt-in manager restoration. The caller owns authentication, retries,
 /// persistence and end-to-end receipts; an ATT write response is not an application receipt.
 @MainActor
 public final class BLEPacketLink: NSObject, PacketLink {
@@ -25,12 +25,19 @@ public final class BLEPacketLink: NSObject, PacketLink {
 
     private(set) var running = false
     private var generation = UUID()
+    private let restoration: BLERestorationConfiguration?
+    private var centralRestorationHandled = false
+    private var peripheralRestorationHandled = false
+    private var peripheralRecovery = BLEPeripheralRestorationRecovery()
     private var serviceName = ""
     private var centralManager: CBCentralManager?
     private var peripheralManager: CBPeripheralManager?
     private var clients: [UUID: ClientLink] = [:]
+    // OS-restored excess handles are retained only until they can be canceled, never routed.
+    private var restoredToCancel: [UUID: CBPeripheral] = [:]
     private var subscribers: [UUID: SubscriberLink] = [:]
     private var messageCharacteristic: CBMutableCharacteristic?
+    private var messageService: CBMutableService?
     private var serviceAdded = false
     private var addingService = false
     private var advertisingRequested = false
@@ -48,6 +55,7 @@ public final class BLEPacketLink: NSObject, PacketLink {
     private final class ClientLink {
         let peripheral: CBPeripheral
         var name: String
+        var service: CBService?
         var characteristic: CBCharacteristic?
         var ready = false
         var closing = false
@@ -60,6 +68,7 @@ public final class BLEPacketLink: NSObject, PacketLink {
         var outbox = BLEOutbox()
         var pumpingWrites = false
         var inbound = BLEReassembler()
+        var restorationRecovery: BLERestoredConnectionRecovery?
 
         init(peripheral: CBPeripheral, name: String) {
             self.peripheral = peripheral
@@ -75,7 +84,14 @@ public final class BLEPacketLink: NSObject, PacketLink {
         init(central: CBCentral) { self.central = central }
     }
 
-    public override init() { super.init() }
+    public override init() { restoration = nil; super.init() }
+
+    /// Use stable identifiers from the host's namespace when recreating an authorized session.
+    /// Restored transport connections are reset before a fresh neighbor handshake.
+    public init(restoration: BLERestorationConfiguration) {
+        self.restoration = restoration
+        super.init()
+    }
 
     /// Use a stable, unique node identity. Discovery names select topology, never trust.
     public func start(nodeName: String = UUID().uuidString) {
@@ -89,8 +105,10 @@ public final class BLEPacketLink: NSObject, PacketLink {
         reportedStartupWait = false
         onState?("BLE waiting for Bluetooth permission and power")
         guard isCurrent(token) else { return }
-        centralManager = CBCentralManager(delegate: self, queue: .main)
-        peripheralManager = CBPeripheralManager(delegate: self, queue: .main)
+        let centralOptions: [String: Any]? = restoration.map { [CBCentralManagerOptionRestoreIdentifierKey: $0.centralIdentifier] }
+        let peripheralOptions: [String: Any]? = restoration.map { [CBPeripheralManagerOptionRestoreIdentifierKey: $0.peripheralIdentifier] }
+        centralManager = CBCentralManager(delegate: self, queue: .main, options: centralOptions)
+        peripheralManager = CBPeripheralManager(delegate: self, queue: .main, options: peripheralOptions)
         maintenanceTask = Task { [weak self] in
             while !Task.isCancelled {
                 do { try await Task.sleep(nanoseconds: 1_000_000_000) }
@@ -119,8 +137,14 @@ public final class BLEPacketLink: NSObject, PacketLink {
             manager.stopScan()
             for link in clients.values {
                 link.peripheral.delegate = nil
-                if link.peripheral.state != .disconnected {
+                if manager.state == .poweredOn, link.peripheral.state != .disconnected {
                     manager.cancelPeripheralConnection(link.peripheral)
+                }
+            }
+            for peripheral in restoredToCancel.values {
+                peripheral.delegate = nil
+                if manager.state == .poweredOn, peripheral.state != .disconnected {
+                    manager.cancelPeripheralConnection(peripheral)
                 }
             }
             manager.delegate = nil
@@ -133,8 +157,13 @@ public final class BLEPacketLink: NSObject, PacketLink {
         centralManager = nil
         peripheralManager = nil
         clients.removeAll()
+        restoredToCancel.removeAll()
         subscribers.removeAll()
         messageCharacteristic = nil
+        messageService = nil
+        centralRestorationHandled = false
+        peripheralRestorationHandled = false
+        peripheralRecovery = BLEPeripheralRestorationRecovery()
         serviceAdded = false
         addingService = false
         advertisingRequested = false
@@ -228,11 +257,71 @@ public final class BLEPacketLink: NSObject, PacketLink {
 
     private func connectIfDue(_ link: ClientLink) {
         guard isCurrent(link), let manager = centralManager, manager.state == .poweredOn,
+              link.restorationRecovery?.canReconnect != false,
               !link.ready, !link.closing, link.attemptStarted == nil,
               link.peripheral.state == .disconnected, Date() >= link.retryAfter else { return }
+        if var recovery = link.restorationRecovery {
+            guard recovery.requestFreshConnection() else { return }
+            link.restorationRecovery = recovery
+        }
         link.attemptStarted = Date()
         link.peripheral.delegate = self
         manager.connect(link.peripheral, options: nil)
+    }
+
+    private func driveRestoredClients() {
+        guard running, let manager = centralManager, manager.state == .poweredOn else { return }
+        let token = generation
+        for peripheral in Array(restoredToCancel.values) {
+            guard isCurrent(token), centralManager === manager else { return }
+            restoredToCancel.removeValue(forKey: peripheral.identifier)
+            if peripheral.state != .disconnected { manager.cancelPeripheralConnection(peripheral) }
+        }
+        for link in Array(clients.values) where link.restorationRecovery != nil {
+            guard isCurrent(token), centralManager === manager else { return }
+            guard isCurrent(link), var recovery = link.restorationRecovery else { continue }
+            recovery.reconcile(state: Self.restoredState(link.peripheral.state))
+            link.restorationRecovery = recovery
+            if recovery.phase == .needsCancellation, link.peripheral.state == .disconnected {
+                recovery.didDisconnect()
+                link.restorationRecovery = recovery
+                link.closing = false
+                connectIfDue(link)
+            } else if recovery.requestCancellation() {
+                link.restorationRecovery = recovery
+                link.closing = true
+                manager.cancelPeripheralConnection(link.peripheral)
+            } else if recovery.canReconnect {
+                link.closing = false
+                connectIfDue(link)
+            }
+        }
+    }
+
+    private static func restoredState(_ state: CBPeripheralState) -> BLERestoredConnectionRecovery.State {
+        switch state {
+        case .disconnected: return .disconnected
+        case .connecting: return .connecting
+        case .connected: return .connected
+        case .disconnecting: return .disconnecting
+        @unknown default: return .connected
+        }
+    }
+
+    /// A local disconnect permits a fresh request, never inherited neighbor authentication.
+    private func finishRestoredDisconnect(_ link: ClientLink, central: CBCentralManager) {
+        guard isCurrent(link), var recovery = link.restorationRecovery else { return }
+        let token = generation
+        guard clearClientChannel(link) else { return }
+        recovery.didDisconnect()
+        link.restorationRecovery = recovery
+        link.closing = false
+        link.attemptStarted = nil
+        link.retryAfter = .distantPast
+        onState?("BLE restored connection reset; reconnecting for fresh neighbor authentication")
+        guard isCurrent(token), central === centralManager, isCurrent(link) else { return }
+        // Queue the OS-managed connection during this callback; a timer cannot wake a suspended app.
+        connectIfDue(link)
     }
 
     private func retryDelay(_ link: ClientLink) {
@@ -248,6 +337,7 @@ public final class BLEPacketLink: NSObject, PacketLink {
         let wasReady = link.ready
         let hadQueuedMessages = !link.outbox.messages.isEmpty
         link.ready = false
+        link.service = nil
         link.characteristic = nil
         link.inFlightPayloadBytes = nil
         link.writeStarted = nil
@@ -271,15 +361,25 @@ public final class BLEPacketLink: NSObject, PacketLink {
             link.closing = true
             manager.cancelPeripheralConnection(link.peripheral)
         } else {
+            if var recovery = link.restorationRecovery, recovery.freshConnectionRequested {
+                recovery.didDisconnect()
+                link.restorationRecovery = recovery
+            }
             link.closing = false
         }
     }
 
     private func ensureAdvertising() {
         guard running, let manager = peripheralManager, manager.state == .poweredOn else { return }
+        let reset = peripheralRecovery.beginReset(poweredOn: true)
+        if reset {
+            manager.stopAdvertising()
+            manager.removeAllServices()
+        }
         if !serviceAdded {
             guard !addingService else { return }
-            manager.removeAllServices()
+            // Never adopt a restored service/characteristic as a live neighbor session.
+            if messageService == nil && !reset { manager.removeAllServices() }
             let characteristic = CBMutableCharacteristic(
                 type: Self.messageUUID,
                 properties: [.write, .writeWithoutResponse, .notify],
@@ -288,6 +388,7 @@ public final class BLEPacketLink: NSObject, PacketLink {
             )
             let service = CBMutableService(type: Self.serviceUUID, primary: true)
             service.characteristics = [characteristic]
+            messageService = service
             messageCharacteristic = characteristic
             addingService = true
             manager.add(service)
@@ -330,13 +431,16 @@ public final class BLEPacketLink: NSObject, PacketLink {
         guard isCurrent(token) else { return }
         ensureScanning()
         guard isCurrent(token) else { return }
+        driveRestoredClients()
+        guard isCurrent(token) else { return }
         ensureAdvertising()
         guard isCurrent(token) else { return }
         do {
             for link in Array(clients.values) {
                 guard isCurrent(token) else { return }
                 guard isCurrent(link) else { continue }
-                if !link.ready, link.peripheral.state == .disconnected, now.timeIntervalSince(link.lastSeen) > 30 {
+                if !link.ready, link.restorationRecovery?.canReconnect != false,
+                   link.peripheral.state == .disconnected, now.timeIntervalSince(link.lastSeen) > 30 {
                     clients.removeValue(forKey: link.peripheral.identifier)
                     link.peripheral.delegate = nil
                     publishPeers()
@@ -435,21 +539,56 @@ public final class BLEPacketLink: NSObject, PacketLink {
 // Core Bluetooth invokes these delegates on the explicitly selected main queue.
 // @preconcurrency bridges its Objective-C delegate requirements in Swift 5 mode.
 extension BLEPacketLink: @preconcurrency CBCentralManagerDelegate {
+    public func centralManager(_ central: CBCentralManager, willRestoreState dict: [String: Any]) {
+        guard running, restoration != nil, central === centralManager, !centralRestorationHandled else { return }
+        centralRestorationHandled = true
+        let token = generation
+        let restored = dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral] ?? []
+        let candidates = restored.filter { clients[$0.identifier] == nil }
+        let selected = Set(BLERestorationSelection.peers(candidates.map(\.identifier),
+            capacity: Self.maximumPeers - clients.count - subscribers.count))
+        for peripheral in candidates {
+            guard isCurrent(token), central === centralManager else { return }
+            guard clients[peripheral.identifier] == nil else { continue }
+            guard selected.contains(peripheral.identifier) else {
+                // Previous PechPech sessions are bounded too. Never adopt excess restored handles.
+                restoredToCancel[peripheral.identifier] = peripheral
+                continue
+            }
+            let link = ClientLink(peripheral: peripheral, name: peripheral.name ?? "Restored PechPech")
+            link.restorationRecovery = BLERestoredConnectionRecovery(state: Self.restoredState(peripheral.state))
+            link.closing = link.restorationRecovery?.canReconnect == false
+            peripheral.delegate = self
+            clients[peripheral.identifier] = link
+        }
+        publishPeers()
+        guard isCurrent(token), central === centralManager else { return }
+        onState?("BLE restoring bounded connections; old sessions must disconnect before fresh authentication")
+        guard isCurrent(token), central === centralManager else { return }
+        driveRestoredClients()
+    }
+
     public func centralManagerDidUpdateState(_ central: CBCentralManager) {
         guard central === centralManager, running else { return }
         let token = generation
         onState?("BLE: \(describe(central.state))")
         guard isCurrent(token), central === centralManager else { return }
         if central.state == .poweredOn {
+            driveRestoredClients()
+            guard isCurrent(token), central === centralManager else { return }
             ensureScanning()
         } else {
             for link in Array(clients.values) {
                 guard isCurrent(token), central === centralManager else { return }
-                link.peripheral.delegate = nil
                 guard clearClientChannel(link) else { return }
+                // A restore callback may precede the initial powered-on state callback.
+                // Keep quarantined handles until the manager can cancel/reconnect them.
+                if link.restorationRecovery == nil {
+                    link.peripheral.delegate = nil
+                    clients.removeValue(forKey: link.peripheral.identifier)
+                }
             }
             guard isCurrent(token), central === centralManager else { return }
-            clients.removeAll()
             publishPeers()
         }
     }
@@ -484,15 +623,36 @@ extension BLEPacketLink: @preconcurrency CBCentralManagerDelegate {
     }
 
     public func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        guard central === centralManager, running,
-              let link = clients[peripheral.identifier], link.peripheral === peripheral, !link.closing else { return }
+        guard central === centralManager, running else { return }
+        guard let link = clients[peripheral.identifier], link.peripheral === peripheral else {
+            if restoration != nil, central.state == .poweredOn { central.cancelPeripheralConnection(peripheral) }
+            return
+        }
+        if var recovery = link.restorationRecovery, !recovery.freshConnectionRequested {
+            recovery.reconcile(state: Self.restoredState(peripheral.state))
+            link.restorationRecovery = recovery
+            link.closing = true
+            driveRestoredClients()
+            return
+        }
+        guard !link.closing else { return }
+        link.restorationRecovery = nil
         peripheral.delegate = self
         peripheral.discoverServices([Self.serviceUUID])
     }
 
     public func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
         guard central === centralManager, running, let link = clients[peripheral.identifier],
-              link.peripheral === peripheral, clearClientChannel(link) else { return }
+              link.peripheral === peripheral else { return }
+        if link.restorationRecovery?.needsSessionReset == true, peripheral.state == .disconnected {
+            finishRestoredDisconnect(link, central: central)
+            return
+        }
+        if var recovery = link.restorationRecovery, recovery.freshConnectionRequested {
+            recovery.didDisconnect()
+            link.restorationRecovery = recovery
+        }
+        guard clearClientChannel(link) else { return }
         link.closing = false
         retryDelay(link)
         onState?("BLE connection failed: \(error?.localizedDescription ?? "unknown cause"); retrying")
@@ -501,6 +661,14 @@ extension BLEPacketLink: @preconcurrency CBCentralManagerDelegate {
     public func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         guard central === centralManager, running, let link = clients[peripheral.identifier],
               link.peripheral === peripheral else { return }
+        if link.restorationRecovery?.needsSessionReset == true {
+            finishRestoredDisconnect(link, central: central)
+            return
+        }
+        if var recovery = link.restorationRecovery, recovery.freshConnectionRequested {
+            recovery.didDisconnect()
+            link.restorationRecovery = recovery
+        }
         let hadRequestedClose = link.closing
         guard clearClientChannel(link) else { return }
         link.closing = false
@@ -514,17 +682,19 @@ extension BLEPacketLink: @preconcurrency CBPeripheralDelegate {
         if let link = clients[peripheral.identifier], link.peripheral === peripheral { pumpWrites(link) }
     }
     public func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        guard running, let link = clients[peripheral.identifier], link.peripheral === peripheral, !link.closing else { return }
+        guard running, let link = clients[peripheral.identifier], link.peripheral === peripheral,
+              link.restorationRecovery == nil, !link.closing else { return }
         guard error == nil, let service = peripheral.services?.first(where: { $0.uuid == Self.serviceUUID }) else {
             failClient(link, reason: "PechPech service discovery failed")
             return
         }
+        link.service = service
         peripheral.discoverCharacteristics([Self.messageUUID], for: service)
     }
 
     public func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
-        guard running, let link = clients[peripheral.identifier], link.peripheral === peripheral, !link.closing,
-              service.uuid == Self.serviceUUID else { return }
+        guard running, let link = clients[peripheral.identifier], link.peripheral === peripheral,
+              link.restorationRecovery == nil, !link.closing, service === link.service else { return }
         guard error == nil,
               let characteristic = service.characteristics?.first(where: { $0.uuid == Self.messageUUID }),
               characteristic.properties.contains(.write), characteristic.properties.contains(.notify) else {
@@ -536,7 +706,8 @@ extension BLEPacketLink: @preconcurrency CBPeripheralDelegate {
     }
 
     public func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
-        guard running, let link = clients[peripheral.identifier], link.peripheral === peripheral, !link.closing,
+        guard running, let link = clients[peripheral.identifier], link.peripheral === peripheral,
+              link.restorationRecovery == nil, !link.closing,
               characteristic === link.characteristic else { return }
         let token = generation
         guard error == nil, characteristic.isNotifying else {
@@ -554,7 +725,8 @@ extension BLEPacketLink: @preconcurrency CBPeripheralDelegate {
     }
 
     public func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
-        guard running, let link = clients[peripheral.identifier], link.peripheral === peripheral, link.ready,
+        guard running, let link = clients[peripheral.identifier], link.peripheral === peripheral,
+              link.restorationRecovery == nil, link.ready,
               characteristic === link.characteristic, let payloadBytes = link.inFlightPayloadBytes else { return }
         guard error == nil else {
             failClient(link, reason: "fragment write failed: \(error!.localizedDescription)")
@@ -570,7 +742,8 @@ extension BLEPacketLink: @preconcurrency CBPeripheralDelegate {
     }
 
     public func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
-        guard running, let link = clients[peripheral.identifier], link.peripheral === peripheral, link.ready,
+        guard running, let link = clients[peripheral.identifier], link.peripheral === peripheral,
+              link.restorationRecovery == nil, link.ready,
               characteristic === link.characteristic else { return }
         guard error == nil, let value = characteristic.value else {
             failClient(link, reason: "incoming notification failed")
@@ -588,12 +761,32 @@ extension BLEPacketLink: @preconcurrency CBPeripheralDelegate {
 
     public func peripheral(_ peripheral: CBPeripheral, didModifyServices invalidatedServices: [CBService]) {
         guard running, invalidatedServices.contains(where: { $0.uuid == Self.serviceUUID }),
-              let link = clients[peripheral.identifier], link.peripheral === peripheral else { return }
+              let link = clients[peripheral.identifier], link.peripheral === peripheral,
+              link.restorationRecovery == nil else { return }
         failClient(link, reason: "PechPech service changed; reconnecting")
     }
 }
 
 extension BLEPacketLink: @preconcurrency CBPeripheralManagerDelegate {
+    public func peripheralManager(_ peripheral: CBPeripheralManager, willRestoreState dict: [String: Any]) {
+        guard running, restoration != nil, peripheral === peripheralManager, !peripheralRestorationHandled else { return }
+        peripheralRestorationHandled = true
+        let token = generation
+        // Do not inherit the old services, subscribers, queued bytes or authenticated peers.
+        // Removing the old GATT service makes surviving PechPech clients invalidate their session.
+        peripheralRecovery.restored()
+        serviceAdded = false
+        addingService = false
+        advertisingRequested = false
+        messageCharacteristic = nil
+        messageService = nil
+        clearSubscribers()
+        guard isCurrent(token), peripheral === peripheralManager else { return }
+        onState?("BLE restoring service session; waiting for fresh service publication and subscription")
+        guard isCurrent(token), peripheral === peripheralManager else { return }
+        ensureAdvertising()
+    }
+
     public func peripheralManagerDidUpdateState(_ peripheral: CBPeripheralManager) {
         guard peripheral === peripheralManager, running else { return }
         let token = generation
@@ -606,15 +799,17 @@ extension BLEPacketLink: @preconcurrency CBPeripheralManagerDelegate {
             addingService = false
             advertisingRequested = false
             messageCharacteristic = nil
+            messageService = nil
             clearSubscribers()
         }
     }
 
     public func peripheralManager(_ peripheral: CBPeripheralManager, didAdd service: CBService, error: Error?) {
-        guard peripheral === peripheralManager, running, service.uuid == Self.serviceUUID else { return }
+        guard peripheral === peripheralManager, running, service === messageService else { return }
         addingService = false
         if let error {
             messageCharacteristic = nil
+            messageService = nil
             onState?("BLE service registration failed: \(error.localizedDescription); retrying")
             return
         }
@@ -635,7 +830,7 @@ extension BLEPacketLink: @preconcurrency CBPeripheralManagerDelegate {
     public func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral,
                            didSubscribeTo characteristic: CBCharacteristic) {
         guard peripheral === peripheralManager, running,
-              characteristic.uuid == Self.messageUUID, subscribers[central.identifier] == nil else { return }
+              serviceAdded, characteristic === messageCharacteristic, subscribers[central.identifier] == nil else { return }
         guard clients.count + subscribers.count < Self.maximumPeers else {
             onState?("BLE subscriber limit reached (\(Self.maximumPeers)); extra client cannot exchange messages")
             return
@@ -653,7 +848,7 @@ extension BLEPacketLink: @preconcurrency CBPeripheralManagerDelegate {
     public func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral,
                            didUnsubscribeFrom characteristic: CBCharacteristic) {
         guard peripheral === peripheralManager, running,
-              characteristic.uuid == Self.messageUUID,
+              serviceAdded, characteristic === messageCharacteristic,
               let link = subscribers.removeValue(forKey: central.identifier) else { return }
         let token = generation
         if !link.outbox.messages.isEmpty {
@@ -682,7 +877,7 @@ extension BLEPacketLink: @preconcurrency CBPeripheralManagerDelegate {
         var staged: [UUID: BLEReassembler] = [:]
         var complete: [(Data, String)] = []
         for request in requests {
-            guard request.characteristic.uuid == Self.messageUUID else {
+            guard serviceAdded, request.characteristic === messageCharacteristic else {
                 peripheral.respond(to: first, withResult: .requestNotSupported)
                 return
             }

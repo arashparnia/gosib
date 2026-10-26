@@ -47,3 +47,20 @@ func assembleOpaqueHost(
         receiveEndpoint: receiveEndpoint
     )
 }
+
+// The host recreates this only when its own persisted session policy permits it.
+// Construction does not start radios, restore keys or resume saved originals.
+@MainActor
+func assembleBackgroundHost(identity: Identity, databaseURL: URL,
+                            permittedSenderIDs: Set<String>) throws -> MeshNode {
+    let restoration = try BLERestorationConfiguration(
+        centralIdentifier: "com.example.consumer.pechpech.central",
+        peripheralIdentifier: "com.example.consumer.pechpech.peripheral")
+    let node = try MeshNode(identity: identity, store: MeshStore(url: databaseURL),
+        links: [BLEPacketLink(restoration: restoration)],
+        authorize: { message, sender in
+            permittedSenderIDs.contains(sender.id) && message.channel == "example.v1"
+        })
+    node.setRetryScheduling(.eventDriven)
+    return node
+}

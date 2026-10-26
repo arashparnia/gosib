@@ -9,6 +9,7 @@ The requested target includes background delivery. Release classification, sourc
 - Bounded, retained opaque queue-admission proof across asynchronous storage reads.
 - Indexed active-message lookups and transactional pruning of expired transport return copies without deleting inbox results.
 - Failed TCP listener recovery with bounded backoff.
+- Opt-in Bluetooth manager restoration with stable host-selected identifiers, inherited-session quarantine, fresh service publication and fresh link authentication.
 - Portable Linux tests using development-only Swift Crypto/SQLite shims, seeded loss/duplication/reordering, process-kill recovery and real scoped ENOSPC/SQLITE_FULL failures.
 
 The shipping package continues using Apple's CryptoKit and system frameworks. Linux qualification copies the unmodified SDK/test sources to `.build/linux-qualification/package` and supplies module shims there; it does not establish Linux radio support or native Apple-framework compatibility.
@@ -29,7 +30,9 @@ node scripts/check-interop-vector.cjs
 
 ## Background delivery boundaries
 
-Event-driven scheduling can process work during execution opportunities the OS provides. It is implemented and tested with injected link events; it does not create OS execution time. iOS hosts own background-mode declarations, permissions and lifecycle integration. The current Apple adapter does not restore Core Bluetooth managers after process termination. A restored old radio connection would also need safe neighbor-session reconciliation before a fresh process could authenticate it.
+Event-driven scheduling can process work during execution opportunities the OS provides. iOS hosts own background-mode declarations, permissions and lifecycle integration. `BLEPacketLink(restoration:)` opts in to manager restoration under explicit host identifiers. Inherited central connections are quarantined until local disconnection and a fresh SDK connection request; peripheral services are rebuilt and require fresh subscription and authentication. No old peer challenges, partial frames or queued bytes are adopted, and pending originals remain paused after process reconstruction.
+
+Restoration is a recovery attempt. Local Core Bluetooth cancellation does not guarantee immediate physical disconnection when another app shares the link. A surviving remote peer must observe service invalidation, resubscription or reconnection before a fresh challenge-pinned session can complete. The SDK fails closed if a fresh authenticated session cannot be established. Linux tests execute these adapter transitions using a development-only CoreBluetooth double; that is not native OS behavior or measured radio evidence.
 
 Continuous TCP execution, delivery after force-quit and uninterrupted arbitrary-hop background routes are not established capabilities. Supported background states and recovery behavior need an explicit host contract and native implementation/verification before claiming those behaviors.
 

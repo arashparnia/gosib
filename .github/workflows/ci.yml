@@ -15,6 +15,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  linux:
+    name: Linux ${{ matrix.configuration }} with Bluetooth mock
+    runs-on: ubuntu-24.04
+    container:
+      image: swift:6.1.2-noble@sha256:6676af406f96360a37297db0ce36d1f3998687c724dde359d6a7b43a1f809d27
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration: [debug, release]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Linux qualification dependencies
+        run: |
+          apt-get update -qq
+          apt-get install -y --no-install-recommends python3 libsqlite3-dev pkg-config clang
+          swift --version
+          pkg-config --modversion sqlite3
+      - name: Portable and BLE adapter mock tests with failure probes
+        run: >-
+          python3 scripts/check-linux-core.py --mock-bluetooth
+          --configuration ${{ matrix.configuration }} --jobs 2
   package:
     name: Package on ${{ matrix.runner }}
     strategy:
@@ -37,6 +61,8 @@ jobs:
         run: node scripts/check-interop-vector.cjs
       - name: Tests
         run: swift test
+      - name: Optimized tests
+        run: swift test -c release
       - name: Release build
         run: swift build -c release
       - name: SwiftPM resource validation

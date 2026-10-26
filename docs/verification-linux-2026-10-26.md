@@ -1,6 +1,6 @@
 # Linux software verification — 26 October 2026
 
-This record covers the production-readiness working branch after 0.3.1. It does not classify a new published release or replace native Apple checks. Editing and execution stayed on Linux; no physical devices or macOS runners were used in this verification round.
+This historical record covers production-readiness commit `42b69803960f04b873190ba5e499b3a7c7289184` after 0.3.1, before manager-restoration implementation. It does not classify a new published release or replace native Apple checks. Editing and execution stayed on Linux; no physical devices or macOS runners were used in this verification round.
 
 ## Environment
 

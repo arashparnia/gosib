@@ -21,13 +21,16 @@ def main() -> None:
     parser.add_argument("--swift", default="swift", help="Swift executable (5.10 or later)")
     parser.add_argument("--jobs", type=int, default=2)
     parser.add_argument("--configuration", choices=("debug", "release"), default="debug")
+    parser.add_argument("--mock-bluetooth", action="store_true",
+                        help="Execute the BLE adapter against a development-only CoreBluetooth mock")
     parser.add_argument("--filter", help="Optional XCTest filter")
     options = parser.parse_args()
     if sys.platform != "linux":
         parser.error("This development-only qualification harness is restricted to Linux")
     if options.jobs < 1:
         parser.error("--jobs must be positive")
-    package = ROOT / ".build/linux-qualification/package"
+    variant = "mock-bluetooth" if options.mock_bluetooth else "package"
+    package = ROOT / ".build/linux-qualification" / variant
     package.mkdir(parents=True, exist_ok=True)
     for name in ("Sources", "Tests"):
         destination = package / name
@@ -42,7 +45,18 @@ def main() -> None:
     (sqlite / "module.modulemap").write_text(
         'module SQLite3 [system] { header "shim.h" link "sqlite3" export * }\n', encoding="utf-8")
     (sqlite / "shim.h").write_text("#include <sqlite3.h>\n", encoding="utf-8")
-    (package / "Package.swift").write_text('''// swift-tools-version: 5.10
+    mock_target = ""
+    mock_dependencies = ""
+    mock_test_settings = ""
+    mock = package / "Shims/CoreBluetooth"
+    if mock.exists():
+        shutil.rmtree(mock)
+    if options.mock_bluetooth:
+        shutil.copytree(ROOT / "scripts/linux/CoreBluetooth", mock)
+        mock_target = '.target(name: "CoreBluetooth", path: "Shims/CoreBluetooth"),'
+        mock_dependencies = ', "CoreBluetooth"'
+        mock_test_settings = ', swiftSettings: [.define("PECHPECH_MOCK_BLUETOOTH")]'
+    manifest = '''// swift-tools-version: 5.10
 import PackageDescription
 let package = Package(name: "PechPechLinuxQualification", dependencies: [
     .package(url: "https://github.com/apple/swift-crypto.git", exact: "3.15.1"),
@@ -50,14 +64,18 @@ let package = Package(name: "PechPechLinuxQualification", dependencies: [
 ], targets: [
     .systemLibrary(name: "SQLite3", path: "Shims/SQLite3", pkgConfig: "sqlite3"),
     .target(name: "CryptoKit", dependencies: [.product(name: "Crypto", package: "swift-crypto")], path: "Shims/CryptoKit"),
+    MOCK_TARGET
     .target(name: "PechPechCore", dependencies: ["CryptoKit", "SQLite3"], resources: [.process("Resources")]),
-    .target(name: "PechPechApple", dependencies: ["PechPechCore", "CryptoKit"], resources: [.process("Resources")]),
+    .target(name: "PechPechApple", dependencies: ["PechPechCore", "CryptoKit"MOCK_DEPENDENCIES], resources: [.process("Resources")]),
     .executableTarget(name: "PechPechDemo", dependencies: ["PechPechCore", "PechPechApple"]),
     .executableTarget(name: "PechPechProcessCrashProbe", dependencies: ["PechPechCore"], path: "Tests/ProcessCrashProbe"),
     .testTarget(name: "PechPechCoreTests", dependencies: ["PechPechCore", "CryptoKit", "SQLite3"], resources: [.copy("Fixtures")]),
-    .testTarget(name: "PechPechAppleTests", dependencies: ["PechPechApple", "PechPechCore", "CryptoKit"])
+    .testTarget(name: "PechPechAppleTests", dependencies: ["PechPechApple", "PechPechCore", "CryptoKit"MOCK_DEPENDENCIES]MOCK_TEST_SETTINGS)
 ], swiftLanguageVersions: [.v5])
-''', encoding="utf-8")
+'''
+    (package / "Package.swift").write_text(
+        manifest.replace("MOCK_TARGET", mock_target).replace("MOCK_DEPENDENCIES", mock_dependencies)
+        .replace("MOCK_TEST_SETTINGS", mock_test_settings), encoding="utf-8")
     command = [options.swift, "test", "--package-path", str(package), "--jobs", str(options.jobs),
                "--configuration", options.configuration]
     if options.filter:
@@ -75,7 +93,9 @@ let package = Package(name: "PechPechLinuxQualification", dependencies: [
     resolved = json.loads((package / "Package.resolved").read_text(encoding="utf-8"))
     print("PASS: Linux portable qualification with development-only crypto/SQLite shims.")
     print("Dependency revisions:", json.dumps(resolved["pins"], sort_keys=True))
-    print("Apple radio, Keychain, native compilation and OS background behavior were not tested.")
+    if options.mock_bluetooth:
+        print("BLE adapter paths executed against a development-only mock, not Apple's CoreBluetooth SDK.")
+    print("Apple radio, Keychain, native Apple SDK compilation and OS background behavior were not tested.")
 
 
 if __name__ == "__main__":

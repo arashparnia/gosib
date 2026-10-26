@@ -2,11 +2,13 @@
 
 ## Unreleased — production hardening
 
+- Add opt-in Bluetooth manager restoration with explicit host-scoped identifiers, cancellation/quarantine of inherited connections, fresh service publication and fresh protocol authentication. Never adopt old subscribers, transient queues or authenticated readiness.
 - Add explicit periodic/event-driven retry scheduling. Event-driven mode keeps links and current caller intent while servicing transport events without a one-second polling task; it does not grant OS background execution or resume restored outgoing intent.
 - Retry refused BLE/TCP queue admission when capacity returns, with coalesced scheduler work and no repeated sends of already-admitted packets. Recover failed TCP listeners with bounded backoff.
 - Retain bounded authenticated queue-admission proof across opaque retry passes and suspended host reads, reject changed hashes for retained IDs, and report proof-capacity backpressure.
 - Query active originals by indexed ID instead of scanning retained outbox history. Prune expired return packets transactionally while preserving immutable inbox receipts and replay recovery.
 - Add Linux-only portable qualification, optimized-mode tests, seeded routing faults, process-kill recovery and scoped real ENOSPC/SQLITE_FULL probes. Apple native compilation and physical background behavior are separate checks.
+- Exercise the actual BLE adapter's delegate paths against a development-only Linux CoreBluetooth mock, including stale services, restoration races, queue limits and transactional ATT batches. CI runs debug and optimized Linux suites plus native Apple builds; mock results remain distinct from radio qualification.
 
 ## 0.3.1 — 26 October 2026
 
