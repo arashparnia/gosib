@@ -12,6 +12,7 @@
 - Add Linux-only portable qualification, optimized-mode tests, seeded routing faults, process-kill recovery and scoped real ENOSPC/SQLITE_FULL probes. Apple native compilation and physical background behavior are separate checks.
 - Exercise the actual BLE adapter's delegate paths against a development-only Linux CoreBluetooth mock, including stale services, restoration races, queue limits and transactional ATT batches. CI runs debug and optimized Linux suites plus native Apple builds; mock results remain distinct from radio qualification.
 - Recover restoration gates after power-off without a disconnect callback and discard invalid peripheral objects after manager reset. Fresh GATT object identity prevents old same-UUID service callbacks from reviving a stale channel.
+- Verify 114 native tests in debug and optimized builds on Apple Silicon and Intel, and 124 portable/mock tests plus seven process/storage-failure probes per Linux configuration. See the [1.0 verification record](docs/verification-1.0-2026-10-26.md) for exact-commit evidence and limits.
 
 ## 0.3.1 — 26 October 2026
 
